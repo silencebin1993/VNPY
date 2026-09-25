@@ -193,6 +193,11 @@ def target_portfolio(score: pd.Series, prev: list[str], industry: pd.Series) -> 
 
 # ---------------------------------------------------------------- 每日打分
 
+def previous_holdings(records: list[dict], day: str) -> list[str]:
+    """上一期组合 = day 之前最后一次记下的组合（调仓日重跑时，track 里已经有当天自己的记录，不能拿它当上一期）"""
+    return next((r["holdings"] for r in reversed(records) if r["date"] < day), [])
+
+
 def run_daily(progress: Progress = None, refresh_valuation: bool = True) -> dict:
     t0 = time.time()
     from ..market import history
@@ -240,7 +245,7 @@ def run_daily(progress: Progress = None, refresh_valuation: bool = True) -> dict
             "groups": {g: (None if pd.isna(v) else round(float(v), 3)) for g, v in grp_df.loc[code].items()},
         })
     track = load_track()
-    prev = track["records"][-1]["holdings"] if track["records"] else []
+    prev = previous_holdings(track["records"], str(day.date()))
     target = target_portfolio(score, prev, p.industry)
     nxt, week_end = calendar_next(day.date())
     out = {
@@ -345,6 +350,65 @@ def _yearly(bt: E.BacktestResult, idx_ret: dict[str, pd.Series]) -> list[dict]:
     return rows
 
 
+STAGE_LABELS: dict[str, str] = {"accumulation": "吸筹", "washout": "洗盘", "markup": "拉升", "distribution": "出货",
+                                 "decline": "下跌", "unclear": "不明确"}
+
+
+def stage_check(p: P.Panel, mask: pd.DataFrame, sd: pd.DatetimeIndex, fwd: pd.DataFrame,
+                holdings: dict[pd.Timestamp, list[str]]) -> dict | None:
+    """样本外每一期：组合里的股票和全部可买股票，按选股当天的"主力阶段"标签分组，看下一期（次日开盘买 → 下期次日开盘卖）
+    比同池平均多赚多少。回答"选出来的怎么都是洗盘 / 吸筹 / 下跌、没有能直接跟进的拉升股"。
+    主力阶段逐日历史来自选股器的历史表（选股器回测时生成）；没有这张表就跳过。"""
+    import polars as pl
+
+    from ..screener import backtest as sbt
+    path = next((x for x in (sbt._cache_paths(True)[0], sbt._cache_paths(False)[0]) if x.exists()), None)
+    if path is None:
+        return None
+    oos = [d for d in sd if d >= pd.Timestamp(OOS_START) and d in fwd.index]
+    st = (pl.read_parquet(path, columns=["code", "date", "stage"]).filter(pl.col("date").is_in([d.date() for d in oos]))
+          .to_pandas())
+    if st.empty:
+        return None
+    st["date"] = pd.to_datetime(st["date"])
+    stage = st.pivot(index="date", columns="code", values="stage").reindex(index=oos, columns=fwd.columns)
+    msk = mask.reindex(index=oos, columns=fwd.columns).fillna(False).values.astype(bool)
+    ret = fwd.reindex(index=oos).values
+    lab = stage.fillna("unclear").values
+    cols = {c: i for i, c in enumerate(fwd.columns)}
+    held = np.zeros_like(msk)
+    for i, d in enumerate(oos):
+        for c in holdings.get(d) or []:
+            j = cols.get(c)
+            if j is not None:
+                held[i, j] = True
+    ok = msk & np.isfinite(ret)
+    base = np.nanmean(np.where(ok, ret, np.nan), axis=1, keepdims=True)
+    exc = ret - base
+
+    def summarize(sel: np.ndarray) -> list[dict]:
+        total = int(sel.sum())
+        out = []
+        for key, name in STAGE_LABELS.items():
+            m = sel & (lab == key)
+            n = int(m.sum())
+            if n == 0:
+                continue
+            wk = np.array([exc[i][m[i]].mean() for i in range(len(oos)) if m[i].any()])
+            t = float(wk.mean() / (wk.std(ddof=1) / np.sqrt(len(wk)))) if len(wk) > 2 and wk.std(ddof=1) > 0 else None
+            out.append({"stage": key, "label": name, "n": n, "share": n / total if total else None,
+                        "excess_wk": float(exc[m].mean()), "win": float((exc[m] > 0).mean()), "t": t})
+        return sorted(out, key=lambda x: -x["n"])
+
+    sel_h = ok & held
+    drop = sel_h & ~np.isin(lab, ["washout", "accumulation", "decline"])
+    return {"source": "chips" if "chips" in path.name and "nochips" not in path.name else "nochips", "weeks": len(oos),
+            "held": summarize(sel_h), "pool": summarize(ok),
+            "held_excess_wk": float(exc[sel_h].mean()) if sel_h.any() else None,
+            "drop_excess_wk": float(exc[drop].mean()) if drop.any() else None,
+            "drop_share": float(drop.sum() / sel_h.sum()) if sel_h.any() else None}
+
+
 def build_report(progress: Progress = None) -> dict:
     t0 = time.time()
     p, ctx, fac, mask = prepare(progress)
@@ -434,6 +498,11 @@ def build_report(progress: Progress = None) -> dict:
                        "cap": float(ctx.float_cap.loc[day].reindex(codes).median()),
                        "univ_cap": float(ctx.float_cap.loc[day].where(mrow).median())})
     tr = pd.DataFrame(traits).mean().to_dict() if traits else {}
+    try:
+        stages = stage_check(p, capacity_mask(p, mask, DEFAULT_CAPITAL), sd, fwd, main_bt.holdings)
+    except Exception as e:  # noqa: BLE001  这一节只是解释，出错不影响报告
+        log.warning("主力阶段对照失败：%s", e)
+        stages = None
 
     report = {
         "generated_at": datetime.now(config.CHINA_TZ).strftime("%Y-%m-%d %H:%M"),
@@ -441,7 +510,7 @@ def build_report(progress: Progress = None) -> dict:
         "spec": {**asdict(spec), "top_n": TOP_N, "keep_rank": KEEP_RANK, "industry_cap": INDUSTRY_CAP, "min_amount": MIN_AMOUNT,
                  "max_participation": MAX_PARTICIPATION, "default_capital": DEFAULT_CAPITAL},
         "st_source": p.st_source, "capacity": capacity, "nav": nav, "random_cagr": rnd_final,
-        "methods": methods, "factors": factor_rows, "traits": tr, "indexes": INDEXES,
+        "methods": methods, "factors": factor_rows, "traits": tr, "indexes": INDEXES, "stage_check": stages,
         "seconds": round(time.time() - t0, 1),
     }
     _write(REPORT_FILE, report)

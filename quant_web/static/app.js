@@ -14,7 +14,9 @@
  *           t(v)[t 值，一位小数；四舍五入会越过 2/1/-1 时改两位小数、不进位]
  *  QW.go(path, query?)  QW.route（reactive {name,path,params,query,title}）  QW.setTitle(text)
  *  QW.store  reactive：status phase dataDate theme isPhone isNarrow jobs{id:job} watchCodes offline clock
- *  QW.usePoll(fn, ms, {live=true, immediate=false})  只能在 setup() 里调用；live=true 时只在"交易中"轮询；页面隐藏时暂停
+ *  QW.usePoll(fn, ms, {live=true, immediate=false})  只能在 setup() 里调用；live=true 时只在"交易中"轮询；页面隐藏时暂停；
+ *                                    切到别的页面时停止，切回来时马上跑一次再继续
+ *  QW.onReturn(fn)                   页面被缓存（keep-alive）后切回来时调用（第一次打开不调用）：刷新账户、名单这类会变的数据
  *  QW.jobs.start(url, body, title) → job_id；QW.jobs.track(id, {title,onDone,onFail})；QW.jobs.running()
  *  QW.watch.refresh() / has(code) / toggle(code, name)
  *  QW.bus.on(evt, fn) → off；QW.bus.emit(evt, data)   事件：'job-done'(job) 'watch-changed' 'status'(status)
@@ -68,12 +70,14 @@
  */
 (function () {
   "use strict";
-  const { createApp, reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick, markRaw } = Vue;
+  const { createApp, reactive, ref, computed, watch, onMounted, onBeforeUnmount, onActivated, onDeactivated, nextTick, markRaw } = Vue;
   const QW = (window.QW = window.QW || {});
   QW.pages = QW.pages || {};
-  QW.page = (name, comp) => { QW.pages[name] = comp; };
+  // 页面放在 <keep-alive> 里：切到别的页面再回来，结果、输入、选中的标签都还在（最多缓存 PAGE_CACHE 个页面）
+  QW.page = (name, comp) => { if (!comp.name) comp.name = "Page-" + name; QW.pages[name] = comp; };
 
   // ------------------------------------------------------------------ 常量
+  const PAGE_CACHE = 12;               // keep-alive 最多缓存几个页面实例（最久没看的先丢）
   const LABELS = {
     sentiment: "情绪面", capital: "资金面", fundamental: "基本面", theme: "题材政策面", technical: "技术面", news: "消息面",
   };
@@ -596,12 +600,35 @@
     }
     return { name: "notfound", path: p, params: {}, query, title: "页面不存在" };
   }
-  const route = reactive(parseHash());
+  // 页面实例键（keep-alive 按它缓存）：同一页面 + 同样的路径参数 = 同一个实例。
+  // 从别处带着新的 ? 参数跳进来（如"去交易页下单"带代码和股数）时换一个新实例，保证按参数重新初始化；
+  // 从导航栏点进来（没有参数）或参数没变，就用缓存的实例。
+  const entries = {};
+  function stampInst(r, samePage) {
+    const base = r.name + ":" + JSON.stringify(r.params);
+    const q = JSON.stringify(r.query || {});
+    const e = entries[base] || (entries[base] = { q, n: 0 });
+    if (!samePage && q !== "{}" && q !== e.q) e.n += 1;
+    e.q = q;
+    r.inst = base + "#" + e.n;
+    return r;
+  }
+  const route = reactive(stampInst(parseHash(), false));
+  const scrollMem = {};
+  const titleMem = {};
   window.addEventListener("hashchange", () => {
     const r = parseHash();
     const samePage = r.name === route.name && JSON.stringify(r.params) === JSON.stringify(route.params);
+    const prev = route.inst;
+    stampInst(r, samePage);
+    if (!samePage) { scrollMem[prev] = window.scrollY; titleMem[prev] = store.pageTitle; }
     Object.assign(route, r);
-    if (!samePage) { store.pageTitle = ""; window.scrollTo(0, 0); }
+    if (!samePage) {
+      store.pageTitle = titleMem[r.inst] || "";
+      const y = scrollMem[r.inst] || 0;
+      window.scrollTo(0, 0);
+      if (y) nextTick(() => window.scrollTo(0, y));
+    }
     hideTip();
   });
   function go(path, query) {
@@ -772,16 +799,25 @@
       fn();
     };
     const onVis = () => { if (!document.hidden) tick(); };
-    onMounted(() => {
-      if (immediate) fn();
+    const start = () => {
+      if (timer) return;
       timer = setInterval(tick, ms);
       document.addEventListener("visibilitychange", onVis);
-    });
-    onBeforeUnmount(() => {
+    };
+    const stop = () => {
       clearInterval(timer);
+      timer = null;
       document.removeEventListener("visibilitychange", onVis);
-    });
+    };
+    onMounted(() => { if (immediate) fn(); start(); });
+    onDeactivated(stop);
+    onReturn(() => { if (!document.hidden) fn(); start(); });
+    onBeforeUnmount(stop);
     return { trigger: fn };
+  }
+  function onReturn(fn) {
+    let first = true;
+    onActivated(() => { if (first) { first = false; return; } fn(); });
   }
 
   // ------------------------------------------------------------------ 状态/任务/自选
@@ -1236,6 +1272,7 @@
         ro.observe(el.value);
       });
       watch(() => props.option, apply);
+      onActivated(() => { if (chart) chart.resize(); });
       onBeforeUnmount(() => {
         cancelAnimationFrame(raf);
         if (ro) ro.disconnect();
@@ -1660,7 +1697,7 @@
         if (route.name === "notfound") return NotFound;
         return QW.pages[route.name] || Placeholder;
       });
-      const pageKey = computed(() => route.name + ":" + JSON.stringify(route.params));
+      const pageKey = computed(() => route.inst);
       const pageTitle = computed(() => store.pageTitle || route.title);
       watch(pageTitle, (t) => { document.title = `${t} · 量化助手`; }, { immediate: true });
       const phaseCls = computed(() => ({ 交易中: "live", 午间休市: "noon", 盘前: "pre" })[store.phase] || "");
@@ -1686,7 +1723,7 @@
       watch(() => route.path, () => { moreOpen.value = false; searchOpen.value = false; });
       const tipRef = (el) => { tipEl = el; };
       return {
-        store, route, tip, tipRef, toastState, closeToast, navGroups, tabRoutes, moreRoutes, moreGroups, pageComp, pageKey, pageTitle,
+        store, route, tip, tipRef, toastState, closeToast, navGroups, tabRoutes, moreRoutes, moreGroups, pageComp, pageKey, pageTitle, PAGE_CACHE,
         phaseCls, running, runPct, runTip, updating, oneClick, toggleTheme, moreOpen, searchOpen, moreActive, fmt,
         onboardHidden, hideOnboard,
       };
@@ -1725,7 +1762,7 @@
           <qw-icon name="book" :size="16"/><span>第一次使用？花 1 分钟完成新手向导：告诉程序你的资金、能买的板块和风险承受度，它会据此给出仓位和止损建议。</span>
           <a class="btn sm primary" href="#/guide">去设置</a><button class="btn sm ghost" @click="hideOnboard">以后再说</button>
         </div>
-        <main class="qw-content"><component :is="pageComp" :key="pageKey" :params="route.params" :query="route.query"/></main>
+        <main class="qw-content"><keep-alive :max="PAGE_CACHE"><component :is="pageComp" :key="pageKey" :params="route.params" :query="route.query"/></keep-alive></main>
       </div>
       <nav v-if="store.isPhone" class="qw-tabbar" aria-label="主导航">
         <a v-for="r in tabRoutes" :key="r.name" :href="'#' + (r.nav || r.path)" :class="{active: route.name === r.name}"><qw-icon :name="r.icon" :size="21"/>{{ r.title }}</a>
@@ -1772,7 +1809,7 @@
 
   // ------------------------------------------------------------------ 导出与启动
   Object.assign(QW, {
-    api, toast, fmt, store, route, go, setTitle, bus, jobs, watch: watchApi, recent, usePoll, colors, tooltipBase, axisBase,
+    api, toast, fmt, store, route, go, setTitle, bus, jobs, watch: watchApi, recent, usePoll, onReturn, colors, tooltipBase, axisBase,
     refreshStatus, LABELS, DIM_HELP, BOARDS, ROUTES, NAV_GROUPS, ICONS, tip: { show: showTip, hide: hideTip }, isNum, ONE_WORD_TIP, AP_PRICE, AP_VOL,
     KINDS, KIND_VALUES, kindInfo, kindLabel, normTrade, tWord, T_HELP, T_NW_NOTE, OOS_CAVEAT, tHelp, SKIP_HEAVY, UNCAPPED_HELP, BASE_HELP, MATCH_HELP, TUNED_HELP,
     fillPct, spanMonths, holdLabel, recentVerdict, HOLD_CAVEAT,

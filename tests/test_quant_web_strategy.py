@@ -245,3 +245,119 @@ def test_strategy_api(client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert client.get("/api/strategy").json()["items"] == []
     s = settings_mod.load()
     assert s.lab.max_mem_gb == 20
+
+
+# ---------------------------------------------------------------- 量化选股 每周调仓（信号类型 mf）
+
+def test_mf_weekly_template_is_fixed_and_the_only_verified() -> None:
+    s = T.resolve("mf_weekly", {"max_positions": 3, "trail": "ma10"})
+    assert s["signal"]["type"] == "mf" and s["max_positions"] == 50 and s["trail"] == "none"   # 参数改不了，回测才对得上
+    assert [t["id"] for t in T.listing() if t["verified"]] == ["mf_weekly"]
+
+
+def _bars(prices: dict, day: date, limit_down: tuple = ()) -> dict:
+    from quant_web.trading import rules
+    out = {}
+    for c, p in prices.items():
+        lu, ld = round(p * 1.1, 2), round(p * 0.9, 2)
+        out[c] = rules.Bar(day, ld, ld, ld, ld, p, lu, ld) if c in limit_down else rules.Bar(day, p, p, p, p, p, lu, ld)
+    return out
+
+
+def _eod(conn, aid: str, day: date, prices: dict, limit_down: tuple = ()) -> dict:
+    from quant_web.trading import engine
+    bars = _bars(prices, day, limit_down)
+    service.paper_eod(conn, aid, day, bars, lambda code: {}, alerts=False)
+    return engine.settle_day(conn, aid, day, {c: b.close for c, b in bars.items()})
+
+
+def test_mf_follow_rebalances_at_one_open_without_overdraft(ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from quant_web.strategy import mf_follow as MF
+    prices = {"600001": 10.0, "600002": 20.0, "600003": 5.0, "600004": 8.0, "600005": 12.0, "600006": 9.0, "600007": 15.0}
+    target = ["600001", "600002", "600003", "600004", "600005"]
+    monkeypatch.setattr(MF, "official_target", lambda: {"date": "2026-09-24", "holdings": target})
+    d1, d2, d3, d4, d5 = date(2026, 9, 24), date(2026, 9, 25), date(2026, 9, 28), date(2026, 9, 29), date(2026, 9, 30)
+    with ledger.connect() as conn:
+        aid = ledger.create_account("量化", "paper", "paper", 1_000_000)["id"]
+        r = MF.mf_step(conn, aid, d1, d2, prices.get)
+        assert r["buys"] == 5 and r["sells"] == 0 and not r["skipped"]
+        _eod(conn, aid, d2, prices)
+        held = {p["code"]: p["qty"] for p in ledger.rows(conn, "SELECT * FROM positions WHERE account_id=?", (aid,))}
+        assert set(held) == set(target) and held["600001"] == 19900           # 等权：100 万 / 5 = 20 万，10 元 → 按一手取整（留出手续费）
+        assert MF.mf_step(conn, aid, d2, d3, prices.get)["buys"] == 0           # 没变化就不下单
+        _eod(conn, aid, d3, prices)
+        # 换两只：卖出回笼的钱同一个开盘就能买；其中一只跌停卖不出 → 对应的买单不成交，现金不透支
+        new = ["600001", "600002", "600003", "600006", "600007"]
+        monkeypatch.setattr(MF, "official_target", lambda: {"date": "2026-09-28", "holdings": new})
+        r2 = MF.mf_step(conn, aid, d3, d4, prices.get)
+        assert r2["sells"] == 2 and r2["buys"] == 2
+        _eod(conn, aid, d4, prices, limit_down=("600005",))
+        acc = ledger.one(conn, "SELECT cash, frozen FROM accounts WHERE id=?", (aid,))
+        held = {p["code"] for p in ledger.rows(conn, "SELECT * FROM positions WHERE account_id=?", (aid,))}
+        assert acc["cash"] >= 0 and "600005" in held and "600004" not in held
+        assert len(held & {"600006", "600007"}) == 1                              # 卖掉一只的钱只够买一只
+        MF.mf_step(conn, aid, d4, d5, prices.get)                                 # 第二天自动补单
+        _eod(conn, aid, d5, prices)
+        held = {p["code"] for p in ledger.rows(conn, "SELECT * FROM positions WHERE account_id=?", (aid,))}
+        assert held == set(new) and ledger.one(conn, "SELECT cash FROM accounts WHERE id=?", (aid,))["cash"] >= 0
+
+
+def test_follow_run_daily_mf_item_skips_history(ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from quant_web.screener import backtest as sbt
+    from quant_web.strategy import mf_follow as MF
+
+    def no_history(*a, **k):
+        raise AssertionError("不该读全市场历史表")
+    monkeypatch.setattr(MF, "official_target", lambda: {"date": "2026-09-24", "holdings": ["600001", "600002"]})
+    monkeypatch.setattr(MF, "latest_prices", lambda: ("2026-09-24", {"600001": 10.0, "600002": 20.0}, {"600001": "甲", "600002": "乙"}))
+    monkeypatch.setattr(sbt, "load_or_build_history", no_history)
+    item = store.save({"template": "mf_weekly"})
+    store.update(item["id"], follow={"enabled": True, "account_id": None}, live=True)
+    out = follow.run_daily(date(2026, 9, 24))
+    res = out["items"][0]
+    assert "error" not in res and res["follow"]["buys"] == 2
+    it = store.get(item["id"])
+    assert it["follow"]["target_date"] == "2026-09-24" and it["follow"]["last_run"] == "2026-09-24"
+    assert ledger.get_account(it["follow"]["account_id"])["initial_cash"] >= MF.MIN_CAPITAL   # 50 只等权要够买一手
+    assert follow.live_candidates() == []                                          # 量化选股的调仓清单不进候选买入
+
+
+def test_nightly_mf_rebalance_block(ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from quant_web.multifactor import service as mf
+    rows = [{"code": c, "name": n, "rank": i + 1} for i, (c, n) in enumerate([("600001", "甲"), ("600002", "乙"), ("600003", "丙")])]
+    today = {"date": "2026-09-24", "rebalance_day": True, "next_trade_day": "2026-09-28", "rows": rows,
+             "target": ["600001", "600002"], "prev_target": ["600002", "600003"]}
+    monkeypatch.setattr(mf, "load_today", lambda: json.loads(json.dumps(today)))
+    r = nightly.mf_rebalance(date(2026, 9, 24))
+    assert r["keep"] == 1 and [x["name"] for x in r["buys"]] == ["甲"] and [x["code"] for x in r["sells"]] == ["600003"]
+    assert nightly.mf_rebalance(date(2026, 9, 25)) is None                         # 不是当天的调仓日就不提示
+
+
+def test_mf_previous_holdings_ignores_same_day_record() -> None:
+    from quant_web.multifactor import service as mf
+    recs = [{"date": "2026-09-18", "holdings": ["a"]}, {"date": "2026-09-24", "holdings": ["b"]}]
+    assert mf.previous_holdings(recs, "2026-09-24") == ["a"]                         # 调仓日重跑：上一期不是自己
+    assert mf.previous_holdings(recs, "2026-09-25") == ["b"]
+    assert mf.previous_holdings(recs[1:], "2026-09-24") == []                        # 第一期
+
+
+def test_strategy_api_mf_and_peek(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    from quant_web import tasks
+    from quant_web.multifactor import service as mf
+    seg = {"cagr": 0.22, "bench_cagr": 0.07, "excess_ann": 0.139, "excess_t": 2.33, "maxdd": -0.21, "bench_maxdd": -0.26, "random_pct": 1.0}
+    monkeypatch.setattr(mf, "load_report", lambda: {"oos_start": "2022-01-01", "data_end": "2026-09-24", "generated_at": "2026-09-25 19:39",
+                                                    "spec": {"default_capital": 5e6}, "capacity": [{"capital": 5e6, "segments": {"全部样本外": seg}}]})
+    submitted: list = []
+    monkeypatch.setattr(tasks, "submit", lambda name, params=None, title=None: submitted.append(name) or "job9")
+    h = client.get("/api/strategy").json()
+    assert h["templates"][0]["id"] == "mf_weekly" and h["mf"]["verdict"]["key"] == "good"
+    assert client.post("/api/strategy/backtest", json={"template": "mf_weekly"}).status_code == 400
+    pk = client.post("/api/strategy/backtest", json={"template": "reversal_value", "peek": True}).json()
+    assert pk["result"] is None and submitted == []                               # 只查缓存，不启动回测
+    it = client.post("/api/strategy/items", json={"template": "mf_weekly"}).json()
+    assert it["is_mf"] and it["backtest"]["source"] == "mf" and it["backtest"]["verdict"]["credible"]
+    assert client.post(f"/api/strategy/items/{it['id']}/live", json={"enabled": True}).status_code == 400
+    f = client.post(f"/api/strategy/items/{it['id']}/follow", json={"enabled": True}).json()
+    assert f["follow"]["enabled"] and f["account"]["total"] >= 1_000_000

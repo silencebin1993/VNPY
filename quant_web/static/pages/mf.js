@@ -3,7 +3,7 @@
    按资金规模的容量表、逐年成绩、方法对照、因子表、前向跟踪。所有成绩都是样本外、扣费后的。 */
 (function () {
   "use strict";
-  const { ref, computed, onMounted, watch } = Vue;
+  const { ref, computed, onMounted, onBeforeUnmount, watch } = Vue;
   const { api, fmt, isNum } = QW;
 
   const GROUPS = { reversal: "反转", activity: "低换手", risk: "低波动", sentiment: "情绪", value: "估值", quality: "质量", surprise: "业绩", size: "小市值", trend: "趋势" };
@@ -46,8 +46,10 @@
         try { plan.value = await api.get("/api/mf/plan", { capital: capital.value || undefined }, { silent: true }); } catch (e) { plan.value = null; }
       };
       onMounted(async () => { await loadToday(); loadReport(); loadTrack(); loadPlan(); });
+      QW.onReturn(() => { loadToday().then(loadPlan); loadTrack(); });   // 切回来：收盘后的自动打分可能已经更新了名单
       let timer = null;
       watch(capital, () => { clearTimeout(timer); timer = setTimeout(loadPlan, 400); });
+      onBeforeUnmount(() => clearTimeout(timer));
 
       const today = computed(() => data.value && data.value.today);
       const rowsBy = computed(() => { const m = {}; ((today.value && today.value.rows) || []).forEach((r) => { m[r.code] = r; }); return m; });
@@ -141,11 +143,27 @@
         return { n: ps.length, s, b };
       });
       const groupBar = (v) => (isNum(v) ? Math.round(v * 100) : 0);
+      // 主力阶段对照：组合里 / 全部可买股票里，各阶段下一周比同池平均多赚多少（样本外）
+      const stageRows = computed(() => {
+        const sc = report.value && report.value.stage_check;
+        if (!sc) return [];
+        const pool = Object.fromEntries((sc.pool || []).map((x) => [x.stage, x]));
+        const held = Object.fromEntries((sc.held || []).map((x) => [x.stage, x]));
+        return ["unclear", "decline", "accumulation", "washout", "markup", "distribution"].filter((k) => held[k] || pool[k])
+          .map((k) => ({ key: k, label: (held[k] || pool[k]).label, held: held[k] || null, pool: pool[k] || null }));
+      });
+      const stageNote = computed(() => {
+        const sc = report.value && report.value.stage_check;
+        const mk = stageRows.value.find((r) => r.key === "markup");
+        if (!sc || !mk || !mk.pool) return null;
+        return { markup: mk.pool.excess_wk, markupT: mk.pool.t, all: sc.held_excess_wk, drop: sc.drop_excess_wk, dropShare: sc.drop_share, weeks: sc.weeks };
+      });
+      const wk = (v) => (isNum(v) ? (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%" : "—");
 
       return {
         HELP, GROUPS, GROUP_KEYS, fmt, isNum, data, report, track, plan, loading, err, tab, capital, capSel, job, jobTitle, today, targetRows,
         sellRows, allRows, runJob, onJobDone, capRows, capNow, segOOS, mainCap, verdict, capLabel, tCls, navOption, histOption, factorRows,
-        trackRows, trackSum, groupBar, loadPlan,
+        trackRows, trackSum, groupBar, loadPlan, stageRows, stageNote, wk,
       };
     },
     template: `<div class="mf-page">
@@ -167,6 +185,21 @@
         <div class="mf-verdict-risk"><qw-icon name="alert" :size="14"/><span>不是保证：历史上 2024 年基本持平；组合偏中小市值、低换手、低波动的股票，小盘股集体大跌时（如 2024 年初）也会一起跌；
           市场整体下跌时组合也会亏钱。资金越大优势越小，上亿资金基本没有优势（见下方容量表）。
           另外，这是在几种方法里挑出的最好的一种（见“为什么用 LightGBM”），实际表现大概率比回测差一些——以“前向跟踪”的真实记录为准。</span></div>
+      </div>
+
+      <div class="mf-goal">
+        <div class="mf-goal-hd"><qw-icon name="target" :size="16"/><b>这个功能的目标</b>
+          <span>每周换一次仓、同时拿 50 只股票，长期（按年算）比“随便买”的平均多赚<template v-if="verdict">约 <b class="up">{{ fmt.ratio(verdict.s.excess_ann, 0) }}/年</b></template>。
+          它不是挑“明天就涨”的股票：单只有涨有跌，靠一篮子整体取胜，所以不追涨、单只不设止损。</span></div>
+        <div class="st-flow mf-flow">
+          <div class="st-step"><i>1</i><div><b>每周最后一个交易日晚上</b><span>程序自动打分（开着就行），下面“本周选股”给出这一期的 50 只</span></div></div>
+          <qw-icon name="chevronRight" :size="16" class="st-arrow"/>
+          <div class="st-step"><i>2</i><div><b>下一个交易日开盘</b><span>按右边“下单清单”先卖掉掉出组合的、再买新进组合的（100 股一手）</span></div></div>
+          <qw-icon name="chevronRight" :size="16" class="st-arrow"/>
+          <div class="st-step"><i>3</i><div><b>拿一周，下周重复</b><span>周中不换股；调仓日晚上<a href="#/trade?tab=nightly">明日计划</a>会提醒你要买卖哪些</span></div></div>
+          <qw-icon name="chevronRight" :size="16" class="st-arrow"/>
+          <div class="st-step"><i>✓</i><div><b>先用模拟盘验证</b><span>在<a href="#/strategy?tpl=mf_weekly">策略中心</a>开“模拟跟踪”，程序每周自动在模拟账户里照做，不花钱</span></div></div>
+        </div>
       </div>
 
       <div class="mf-bar">
@@ -194,7 +227,7 @@
             <span class="muted mf-tabs-note">可买股票 {{ today.universe_n }} 只<template v-if="today.capacity_n < today.universe_n">，按你的资金（{{ capLabel(today.capital) }}）流动性够的 {{ today.capacity_n }} 只</template> · <span v-tip="HELP.keep">持有规则</span></span></div>
           <qw-table v-if="tab !== 'sell'" :rows="tab === 'target' ? targetRows : allRows" row-key="code" dense clickable max-height="560px" :page-size="300"
             @row-click="(r) => $go('/watch/' + r.code)" empty-text="没有股票"
-            :columns="[{key:'rank',label:'排名',align:'right',sortable:true,width:'58px'},{key:'name',label:'股票',minWidth:'120px'},{key:'industry',label:'行业'},{key:'close',label:'收盘',align:'right'},{key:'chg',label:'当日',align:'right',sortable:true},{key:'amount20',label:'日均成交',align:'right',sortable:true},{key:'float_cap',label:'流通市值',align:'right',sortable:true},{key:'groups',label:'因子画像（越长越符合）',minWidth:'250px'},{key:'flag',label:'',align:'right'}]">
+            :columns="[{key:'rank',label:'排名',align:'right',sortable:true,width:'58px'},{key:'name',label:'股票',minWidth:'120px'},{key:'industry',label:'行业',minWidth:'76px'},{key:'close',label:'收盘',align:'right'},{key:'chg',label:'当日',align:'right',sortable:true},{key:'amount20',label:'日均成交',align:'right',sortable:true},{key:'float_cap',label:'流通市值',align:'right',sortable:true},{key:'groups',label:'因子画像（越长越符合）',minWidth:'250px'},{key:'flag',label:'',align:'right'}]">
             <template #cell-rank="{row}"><span class="num">{{ row.rank || '—' }}</span></template>
             <template #cell-name="{row}"><qw-stock :code="row.code" :name="row.name"/></template>
             <template #cell-industry="{row}"><span class="muted">{{ $fmt.industry(row.industry) }}</span></template>
@@ -241,10 +274,41 @@
               <li>每周最后一个交易日晚上看这里的组合；下一个交易日开盘（集合竞价）按清单买卖。</li>
               <li>开盘就涨停买不进的跳过，改买排名下一只；开盘跌停卖不出的，等能卖的那天再卖。</li>
               <li>不在周中追加或换股；组合整体跟随市场涨跌，单只股票不设止损（回测就是这样做的）。</li>
+              <li>不确定就先<a href="#/strategy?tpl=mf_weekly">开模拟跟踪</a>：程序在模拟账户里每周自动照做，跑一段时间看看再用真钱。</li>
             </ol>
           </div>
         </qw-card>
       </div>
+
+      <qw-card v-if="today" class="mf-stage" title="选出来的股票为什么多是“洗盘 / 吸筹 / 下跌”，没有能直接跟进的“拉升”？" icon="info">
+        <div class="mf-stage-grid">
+          <div class="mf-stage-text">
+            <p>这是故意的，也正是它赚钱的地方。量化选股专门挑<b>最近跌过、冷门（换手低）、波动小、没被炒过</b>的股票——模型最看重的因子是“近 60 日涨停次数”，<b>越少越好</b>。
+              这类股票在诊断页的“主力阶段”里自然多半显示为洗盘、吸筹、下跌或不明确。</p>
+            <p v-if="stageNote">而看起来“能直接跟进”的<b>拉升</b>股，历史上是下一周表现<b>最差</b>的一组：样本外 {{ stageNote.weeks }} 周里，
+              全部可买股票中被判为拉升的，下一周平均比同池<b class="down">{{ wk(stageNote.markup) }}</b>（t 值 {{ $fmt.t(stageNote.markupT) }}），追进去平均是亏的。</p>
+            <p v-else>而看起来“能直接跟进”的拉升股，历史上下一周平均跑输同池（A 股短期追涨的普遍规律；连板、趋势类方案的回测也都跑输随机）。</p>
+            <p v-if="stageNote">组合里的股票，不管显示哪个阶段，整体都跑赢同池（每周平均 <b class="up">{{ wk(stageNote.all) }}</b>）。如果只留“不是洗盘 / 吸筹 / 下跌”的，
+              每周是 {{ wk(stageNote.drop) }}——几乎一样，但组合只剩约 {{ $fmt.ratio(stageNote.dropShare, 0) }} 的股票，更集中、更靠运气。</p>
+            <p class="mf-stage-do"><qw-icon name="checkCircle" :size="14"/><span><b>怎么做：</b>照整个组合买，不要再按主力阶段挑一遍；也不要因为某只“看起来弱”就不买、看到“拉升”就追。主力阶段只是描述走势形态，不是买卖信号。</span></p>
+          </div>
+          <div v-if="stageRows.length" class="mf-scroll">
+            <table class="mini-table">
+              <thead><tr><th>主力阶段<br><small class="muted">选股当天</small></th><th class="num">组合里<br>占比</th><th class="num">组合里<br><small class="muted">下周比同池</small></th><th class="num">全部可买股票<br><small class="muted">下周比同池</small></th></tr></thead>
+              <tbody>
+                <tr v-for="r in stageRows" :key="r.key" :class="{hl: r.key === 'markup'}">
+                  <td><b>{{ r.label }}</b></td>
+                  <td class="num">{{ r.held ? $fmt.ratio(r.held.share, 0) : '—' }}</td>
+                  <td class="num" :class="$fmt.dir(r.held && r.held.excess_wk)">{{ r.held ? wk(r.held.excess_wk) : '—' }}<small v-if="r.held && r.held.n < 500" class="muted">（样本少）</small></td>
+                  <td class="num" :class="$fmt.dir(r.pool && r.pool.excess_wk)">{{ r.pool ? wk(r.pool.excess_wk) : '—' }}<small v-if="r.pool" class="muted"> t {{ $fmt.t(r.pool.t) }}</small></td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="muted mf-foot">样本外 {{ report.oos_start }} 起每周一期；“比同池”= 下一期（次日开盘买、下期次日开盘卖）收益减去同一天全部可买股票的平均，未扣费。
+              主力阶段来自选股器的逐日历史表。</div>
+          </div>
+        </div>
+      </qw-card>
 
       <template v-if="report">
         <div class="mf-row2">

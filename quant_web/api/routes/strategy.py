@@ -1,5 +1,6 @@
 """
 策略中心接口：模板、我的策略（新建 / 修改 / 删除）、诚实回测（后台任务）、开启模拟跟踪、开启实盘建议、最近的建议。
+"量化选股 每周调仓"模板（信号类型 mf）的回测就是量化选股页的回测报告（这里只取摘要），不另外跑。
 """
 from typing import Annotated, Any
 
@@ -11,9 +12,45 @@ from ..common import mod, ok
 router = APIRouter()
 
 
-def _item_view(item: dict) -> dict:
+def _mf_summary() -> dict | None:
+    """量化选股回测报告的摘要（默认资金规模、全部样本外）+ 最近一期组合的日期"""
+    svc = mod("multifactor.service")
+    rep = svc.load_report()
+    if not rep:
+        return None
+    default = rep["spec"]["default_capital"]
+    cap = next((c for c in rep["capacity"] if c["capital"] == default), None)
+    seg = (cap or {}).get("segments", {}).get("全部样本外")
+    if not seg:
+        return None
+    good = seg["excess_ann"] > 0 and seg["excess_t"] >= 2
+    key = "good" if good else "weak" if seg["excess_ann"] > 0 else "bad"
+    recs = svc.load_track().get("records") or []
+    today = svc.load_today() or {}
+    return {
+        "oos_start": rep["oos_start"], "data_end": rep["data_end"], "generated_at": rep["generated_at"], "capital": default,
+        **{k: seg.get(k) for k in ("cagr", "bench_cagr", "excess_ann", "excess_t", "maxdd", "bench_maxdd", "random_pct")},
+        "verdict": {"key": key, "credible": good,
+                    "text": f"样本外（{rep['oos_start'][:7]} 起，{default / 1e4:.0f} 万资金口径，扣费后）年化 {seg['cagr'] * 100:.1f}%，"
+                            f"同池随机 {seg['bench_cagr'] * 100:.1f}%，每年超额 {seg['excess_ann'] * 100:+.1f}%，t 值 {seg['excess_t']:.1f}。"},
+        "last_record": recs[-1]["date"] if recs else None, "records": len(recs),
+        "today": {k: today.get(k) for k in ("date", "rebalance_day", "next_trade_day")} if today else None,
+    }
+
+
+def _cached_backtest(spec: dict) -> dict | None:
+    """同样的模板 + 参数以前回测过（不管是不是存成了"我的策略"）就直接用"""
+    bt = mod("strategy.backtest")
+    boards = list(bt.settings_view()["profile"].get("boards") or ["main"])
+    extra = (mod("modellab.store").enabled() or "") if spec["signal"]["type"] == "model" else ""
+    return mod("strategy.store").load_backtest(bt.key_of(spec, boards, extra))
+
+
+def _item_view(item: dict, mf: dict | None = None) -> dict:
     st = mod("strategy.store")
-    bt = st.load_backtest(item.get("backtest_key"))
+    T = mod("strategy.templates")
+    is_mf = T.TEMPLATES.get(item.get("template"), {}).get("signal", {}).get("type") == "mf"
+    bt = None if is_mf else st.load_backtest(item.get("backtest_key"))
     acc = None
     aid = (item.get("follow") or {}).get("account_id")
     if aid:
@@ -25,9 +62,13 @@ def _item_view(item: dict) -> dict:
             acc = {"id": aid, "total": snap["total"], "return": snap["return"], "positions": len(snap["positions"])}
         except Exception:  # noqa: BLE001  账户被删了
             acc = None
-    return {**item, "backtest": {"key": bt["key"], "verdict": bt["verdict"], "saved_at": bt.get("saved_at"),
-                                 "holdout": (bt["segments"].get("holdout") or {}).get("excess_cagr")} if bt else None,
-            "account": acc, "latest": st.load_latest(item["id"])}
+    if is_mf:
+        mf = mf if mf is not None else _mf_summary()
+        backtest = {"key": None, "source": "mf", "verdict": mf["verdict"], "saved_at": mf["generated_at"]} if mf else None
+    else:
+        backtest = {"key": bt["key"], "verdict": bt["verdict"], "saved_at": bt.get("saved_at"),
+                    "holdout": (bt["segments"].get("holdout") or {}).get("excess_cagr")} if bt else None
+    return {**item, "backtest": backtest, "account": acc, "latest": None if is_mf else st.load_latest(item["id"]), "is_mf": is_mf}
 
 
 @router.get("/api/strategy")
@@ -35,8 +76,9 @@ def strategy_home() -> Any:
     T = mod("strategy.templates")
     st = mod("strategy.store")
     lab = mod("modellab.store")
+    mf = _mf_summary()
     return ok({"templates": T.listing(), "entry": T.ENTRY, "trail": T.TRAIL, "param_names": T.PARAM_NAMES,
-               "items": [_item_view(x) for x in st.list_items()], "model_enabled": lab.enabled(),
+               "items": [_item_view(x, mf) for x in st.list_items()], "model_enabled": lab.enabled(), "mf": mf,
                "holdout_start": str(mod("predict.backtest").HOLDOUT_START)})
 
 
@@ -62,17 +104,31 @@ def strategy_backtest(
     params: Annotated[dict | None, Body(embed=True)] = None,
     item_id: Annotated[str | None, Body(embed=True)] = None,
     force: Annotated[bool, Body(embed=True)] = False,
+    peek: Annotated[bool, Body(embed=True)] = False,
 ) -> Any:
+    """已经回测过同样的模板 + 参数就直接返回结果；peek=true 只查缓存（没有就返回 result=None，不启动任务）"""
     T = mod("strategy.templates")
     spec = T.resolve(template, params)                       # 参数不对直接 400
+    if spec["signal"]["type"] == "mf":
+        raise HTTPException(400, "“量化选股 每周调仓”的回测就是量化选股页的回测报告，请在量化选股页查看或重新回测")
     if spec["signal"]["type"] == "model" and not mod("modellab.store").enabled():
+        if peek:
+            return ok({"result": None})
         raise HTTPException(400, "这个策略要用实验室的模型：请先在模型实验室训练一个模型，并点“启用到选股器”")
     st = mod("strategy.store")
-    if item_id and not force:
-        item = st.get(item_id)
-        bt = st.load_backtest(item.get("backtest_key"))
-        if bt and bt.get("spec") == spec:
+    if not force:
+        bt = None
+        if item_id:
+            bt = st.load_backtest(st.get(item_id).get("backtest_key"))
+            if bt and bt.get("spec") != spec:
+                bt = None
+        bt = bt or _cached_backtest(spec)
+        if bt:
+            if item_id and st.get(item_id).get("backtest_key") != bt["key"]:
+                st.update(item_id, backtest_key=bt["key"])
             return ok({"result": bt})
+        if peek:
+            return ok({"result": None})
     job_id = mod("tasks").submit("strategy_backtest", {"template": template, "params": params or {}, "item_id": item_id},
                                  title=f"策略回测：{spec['name']}")
     return ok({"job_id": job_id})
@@ -101,7 +157,10 @@ def strategy_follow(item_id: str, enabled: Annotated[bool, Body(embed=True)]) ->
 
 @router.post("/api/strategy/items/{item_id}/live")
 def strategy_live(item_id: str, enabled: Annotated[bool, Body(embed=True)]) -> Any:
-    return ok(_item_view(mod("strategy.store").update(item_id, live=bool(enabled))))
+    st = mod("strategy.store")
+    if enabled and mod("strategy.follow").is_mf(st.get(item_id)):
+        raise HTTPException(400, "量化选股的调仓清单每个调仓日会自动出现在“交易 → 明日计划”，量化选股页也有按你的资金算好的下单清单，不需要再开实盘建议")
+    return ok(_item_view(st.update(item_id, live=bool(enabled))))
 
 
 @router.post("/api/strategy/run")

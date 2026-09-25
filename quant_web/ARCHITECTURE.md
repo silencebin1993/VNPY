@@ -797,7 +797,7 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
   - 使用顺序：先做诚实回测，再开启模拟跟踪，最后生成实盘建议（进入明日计划，买入仍要人工确认）。
   - **回测和模拟跟踪调用同一个每日函数**，规则完全一样。
 - `templates.py`：
-  - `TEMPLATES` 共 6 个：reversal_value、trend_swing、mainforce_follow、washout_dip、value_trend、model_rotation。每个都有 name、signal、who、desc、defaults；说明里写明已知的回测结论，没有一个标"推荐"。
+  - `TEMPLATES` 共 7 个：mf_weekly（量化选股 每周调仓，规则固定、唯一 verified，见 §12）、reversal_value、trend_swing、mainforce_follow、washout_dip、value_trend、model_rotation。每个都有 name、signal、who、desc、defaults；说明里写明已知的回测结论，没有一个标"推荐"。
   - 选项：`ENTRY`（open / pullback，pullback 为次日低 2% 的限价单）；`TRAIL` 与 `plans.TRAIL_RULES` 一致。
   - `resolve(template, params)` 合并参数并校验：target_r 0~10、max_days 1~250、max_positions 1~30，另有 exit_distribution、regime 两个开关。
 - `signals.py`：
@@ -944,3 +944,39 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
 - 消息政策、数据源、板块强弱、模型中心、短线预测的长列表都有独立滚动框。
 - 选股器"修改条件"报错（2026-09-25 修复）：`GET /api/screener/schemes` 以前把未规范化的内置方案发给前端，"主力阶段"条件缺 include/exclude 之一，编辑器读 `undefined.includes` 崩溃；
   现在发 `{**原方案, **validate_scheme(原方案)}`，前端 `pick()` 也兜底补空列表；回归测试在 `test_quant_web_screener.py`。
+
+## 12. 页面缓存、选股器结果区、策略中心与量化选股打通（2026-09-25）
+- **页面缓存**（`app.js`）：`<component>` 外包 `<keep-alive :max="PAGE_CACHE">`（12 个），切页面再回来结果、输入、标签、进行中的后台任务都还在。
+  - 实例键 `route.inst` = 页面名 + 路径参数 + 序号：从别处带着**新的 ? 参数**跳进来（例如"去交易页下单"带代码和股数、`#/screener?id=`、`#/strategy?tpl=`）时序号加一 → 新实例，按参数重新初始化；
+    从导航栏进来（没有参数）或参数没变就用缓存的实例。同一页面里改参数不换实例（和以前一样）。
+  - 切走时记下滚动位置和 `store.pageTitle`，切回同一实例时恢复。
+  - `QW.usePoll`：切走时停（`onDeactivated`），切回来马上跑一次再继续。`QW.onReturn(fn)`：页面被缓存后切回来时调用（第一次打开不调用）——交易页用它重读账户和持仓（钱的数字不能是旧的），
+    量化选股、策略中心、选股器用它刷新名单和开关。`QwChart` 在 `onActivated` 里 `resize()`。`QW.page()` 自动给页面组件起名 `Page-<name>`。
+- **选股器**（`pages/screener.js`）：
+  - 结果区是一张卡片的两个标签"选股结果 / 历史回测"：点"运行选股"切到选股结果，点"历史回测"切到历史回测并在结果区不在屏幕里时滚过去（以前回测卡片在 50 行结果表下面，点了看起来"没反应"）。
+  - "已修改，未保存"改成 `JSON(draft) !== 保存时的快照` 的计算属性。以前 `watch(draft, deep)` 在 `pick()` 之后异步触发，**一打开方案就被标成已修改**，于是运行选股总是按"临时条件"跑、后端不存结果。
+  - 每个方案的结果、回测、进行中的回测任务、当前标签按方案编号记在页面里；没运行过的方案打开时读 `GET /api/screener/latest/{id}`（后端存的上次结果，标"上次运行的结果"）；
+    条件改过之后显示"下面还是按修改前的条件"提示。回测任务完成只刷新方案列表的标签（`load(true)`），不再重置正在改的条件。
+  - 历史回测下面有"回测完接下来做什么"：有优势 → 去策略中心做成策略（`GET /api/screener/schemes` 每个方案带 `strategy_template`）；没有优势 → 不建议照着买，指向量化选股。
+- **策略中心**：
+  - 页面顶部四步流程（选股来源 → 诚实回测 → 模拟跟踪（交易页的模拟账户）→ 实盘建议（明日计划的候选买入）），每一步都链到对应页面；回测结果下面按结论给"下一步"。
+  - 新模板 `mf_weekly`"量化选股 每周调仓"（`signal.type = "mf"`，`fixed`、`verified`，排第一）：`resolve()` 忽略用户参数；**回测就是量化选股页的回测报告**
+    （`GET /api/strategy` 的 `mf` 摘要：默认资金规模、全部样本外；`POST /api/strategy/backtest` 对它返回 400）；不开"实盘建议"（400，调仓清单走明日计划的专门区块）。
+  - `strategy/mf_follow.py`：模拟跟踪 = 向 `track.json` 最近一期正式组合靠拢：卖出组合外的持仓，按"总资产 × 0.998 ÷ 组合只数"等权买入组合内还没有的，都挂下一个交易日开盘；
+    **卖出回笼的钱同一个开盘就能用**：`engine.place(..., credit=)` 允许买单按预计回笼资金下单（冻结只冻可用现金那部分，委托 flags 记 `credit`），
+    `match_with_bars` 撮合这种买单前 `_credit_ok` 再核对现金（卖出没成交、钱不够就不买，当天过期，第二天收盘后自动补单）——账户现金不会为负。
+    模拟账户起始资金 = max(我的资金, 100 万)（50 只等权每只约 2 万才买得起一手）。`follow.run_daily` 先处理 mf 策略（不读全市场历史表），再处理其他策略。
+  - 同样的模板 + 参数回测过就直接用（`_cached_backtest` 按 `backtest.key_of` 查，不管有没有存成"我的策略"）；`peek: true` 只查缓存不启动任务（前端切模板时用；旧版后端没有 `mf` 字段时前端不调用）。
+  - 模拟账户链接 `#/trade?acc=<id>`（交易页 `applyQuery` 支持 `acc`）。
+- **明日计划**（`trading/nightly.py`）：`mf_rebalance(day)`——今天是量化选股调仓日时列出继续持有 / 卖出 / 买入（交易页"明日计划"第一张卡）；
+  mf 策略的模拟账户在持仓动作里不看主力阶段、不要求止损，只标出"调仓卖出"。
+- **量化选股**：
+  - 页面顶部"这个功能的目标"+ 每周四步；下单清单"怎么执行"加"先开模拟跟踪"。
+  - 新卡片"选出来的股票为什么多是洗盘 / 吸筹 / 下跌，没有能直接跟进的拉升"：`service.stage_check()`（`build_report` 里算，存 `report.stage_check`）——
+    样本外每周，组合里和全部可买股票按选股当天主力阶段（选股器历史表 `table_chips.parquet`，没有就用 nochips，都没有就跳过）分组，下一期比同池平均的超额。
+    实测（2022-01 ~ 2026-09，240 周，500 万口径，未扣费）：**全部可买股票里"拉升"下一周 −0.43%（t −4.2），是最差的一组**；组合里不明确 44% / 下跌 32% / 吸筹 13% / 洗盘 8% / 拉升 3%，
+    不明确 +0.51%/周（t 3.1）、下跌 +0.45%（t 2.1）、吸筹 +0.36%（t 2.1）、洗盘 +0.21%、拉升 −0.58%（样本少）；只留"不是洗盘 / 吸筹 / 下跌"的每周 +0.43% vs 全部 +0.41%，却只剩 48% 的股票——不按主力阶段二次筛选。
+  - 诊断页主力阶段卡：股票在最新一期组合里时提示"不要按主力阶段取舍"（`GET /api/mf/membership`，前端缓存 10 分钟）。
+  - 修正：`run_daily` 的上一期组合改用 `previous_holdings(records, day)`（日期早于今天的最后一条记录）。以前调仓日重跑打分时拿当天自己的记录当"上一期"，
+    `prev_target == target`，"新买入 / 要卖出"全部显示成"继续持有"。
+- 测试：`tests/test_quant_web_strategy.py` 新增 mf 模板固定、mf 模拟跟踪同一开盘换仓且卖不出时不透支、`run_daily` 处理 mf 不读历史表、明日计划调仓区块、上一期组合、策略接口（mf 摘要 / peek / live 400）。

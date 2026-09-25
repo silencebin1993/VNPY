@@ -218,6 +218,12 @@ textarea.fm-code { resize: vertical; }
 .sc-weights em { font-style: normal; font-size: 11px; }
 .sc-funnel { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 10px 16px; font-size: 13px; border-bottom: 1px solid var(--border); }
 .sc-reason { font-size: 12.5px; line-height: 1.55; }
+/* 选股器结果区：一张卡片两个标签（选股结果 / 历史回测） */
+.sc-out { scroll-margin-top: calc(var(--top-h) + 12px); }
+.sc-out .mf-tabs { border-bottom: 1px solid var(--border); padding-bottom: 0; }
+.sc-bt { padding: 12px 16px 14px; display: flex; flex-direction: column; gap: 10px; }
+.sc-bt-hd { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.sc-next { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px dashed var(--border); font-size: 13px; line-height: 1.7; }
 
 /* ------------------------------------------------------------ 交易 */
 .td-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -295,3 +301,24 @@ textarea.fm-code { resize: vertical; }
 .fm-wide { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .fm-holds { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 0 20px; }
 .fm-holds .fm-hold { min-width: 0; }
+
+/* 明日计划：量化选股调仓 */
+.td-mf { display: flex; flex-direction: column; gap: 10px; font-size: 13.5px; line-height: 1.7; }
+.td-mf-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px 16px; }
+.td-mf-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; max-height: 150px; overflow: auto; }
+
+/* 策略中心：四步流程条 + 回测后的下一步 */
+.st-flow { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: stretch; }
+.st-step { display: flex; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); font-size: 12.5px; line-height: 1.6; }
+.st-step i { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-weight: 700; font-size: 12px;
+  background: var(--primary-weak); color: var(--primary); margin-top: 1px; }
+.st-step b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+.st-step span { color: var(--text-2); }
+.st-arrow { align-self: center; color: var(--text-3); }
+@media (max-width: 1100px) { .st-flow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .st-arrow { display: none; } }
+@media (max-width: 640px) { .st-flow { grid-template-columns: minmax(0, 1fr); } }
+.st-next { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px dashed var(--border); font-size: 13px; line-height: 1.7; }
+.st-next ol { margin: 4px 0 0; padding-left: 20px; }
+.st-rules { margin-top: 12px; font-size: 13px; line-height: 1.7; }
+.st-rules ul { margin: 4px 0 0; padding-left: 18px; }
+.mf-plan-sum.st-mf-nums { margin-top: 4px; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }

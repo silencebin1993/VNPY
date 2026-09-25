@@ -30,17 +30,29 @@ def _stage_of(code: str) -> tuple[str | None, str | None]:
         return None, None
 
 
-def position_actions(conn, account_id: str, day: date, with_stage: bool = True) -> list[dict]:
+def position_actions(conn, account_id: str, day: date, with_stage: bool = True, mf_follow: bool = False) -> list[dict]:
+    """mf_follow：跟随量化选股组合的模拟账户——按组合调仓，不看主力阶段、不要求止损（和回测一致），只标出要调出的"""
     out: list[dict] = []
+    target: set[str] = set()
+    if mf_follow:
+        from ..strategy import mf_follow as mff
+        rec = mff.official_target()
+        target = set((rec or {}).get("holdings") or [])
     for p in ledger.rows(conn, "SELECT * FROM positions WHERE account_id=? ORDER BY opened", (account_id,)):
         plan = ledger.one(conn, "SELECT * FROM plans WHERE id=?", (p["plan_id"],)) if p.get("plan_id") else None
         close = p.get("last_close") or p.get("last_price") or p["cost"]
         pnl_pct = close / p["cost"] - 1 if p["cost"] else None
         held = (day - date.fromisoformat(p["opened"])).days if p.get("opened") else None
-        stage_key, stage_label = _stage_of(p["code"]) if with_stage else (None, None)
+        stage_key, stage_label = _stage_of(p["code"]) if with_stage and not mf_follow else (None, None)
         action, tone = "继续持有", "neutral"
         reasons: list[str] = []
-        if plan and close <= plan["stop"]:
+        if mf_follow:
+            if target and p["code"] not in target:
+                action, tone = "调仓卖出", "watch"
+                reasons.append("已不在最新一期量化选股组合里：模拟账户会在下一个交易日开盘自动卖出")
+            else:
+                reasons.append("量化选股组合持仓：调仓日按组合换股，平时不动，不设单只止损")
+        elif plan and close <= plan["stop"]:
             action, tone = "明天开盘卖出", "bad"
             reasons.append(f"收盘 {close:.2f} 已跌破止损价 {plan['stop']:.2f}")
         elif stage_key == "distribution":
@@ -52,7 +64,7 @@ def position_actions(conn, account_id: str, day: date, with_stage: bool = True) 
         elif plan and plan.get("max_days") and held is not None and held > plan["max_days"] * 1.45:
             action, tone = "考虑离场", "watch"
             reasons.append(f"已经持有约 {held} 天，超过计划的 {plan['max_days']} 个交易日")
-        if not plan:
+        if not plan and not mf_follow:
             reasons.append("没有交易计划：请补一个止损价")
         out.append({"code": p["code"], "name": p.get("name"), "qty": p["qty"], "available": p["available"], "cost": p["cost"],
                     "close": close, "pnl_pct": pnl_pct, "held_days": held, "stop": plan["stop"] if plan else None,
@@ -96,6 +108,32 @@ def candidates(limit: int = 5) -> list[dict]:
     return out
 
 
+def _mf_follow_accounts() -> set[str]:
+    """策略中心里"量化选股 每周调仓"的模拟账户"""
+    try:
+        from ..strategy import follow, store
+        return {(x.get("follow") or {}).get("account_id") for x in store.list_items() if follow.is_mf(x)} - {None}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def mf_rebalance(day: date) -> dict | None:
+    """今天是量化选股的调仓日（每周最后一个交易日）：明天开盘要卖哪些、买哪些（下单股数按资金在量化选股页算）"""
+    try:
+        from ..multifactor import service as mf
+        t = mf.load_today()
+    except Exception:  # noqa: BLE001
+        return None
+    if not t or t.get("date") != str(day) or not t.get("rebalance_day"):
+        return None
+    names = {r["code"]: r.get("name") or "" for r in t.get("rows") or []}
+    target, prev = list(t.get("target") or []), list(t.get("prev_target") or [])
+    buys = [c for c in target if c not in set(prev)]
+    sells = [c for c in prev if c not in set(target)]
+    return {"date": t["date"], "next_trade_day": t.get("next_trade_day"), "n": len(target), "keep": len(target) - len(buys),
+            "buys": [{"code": c, "name": names.get(c, "")} for c in buys], "sells": [{"code": c, "name": names.get(c, "")} for c in sells]}
+
+
 def build(day: date | None = None, with_stage: bool = True) -> dict:
     from ..analysis import market
     from ..market import history
@@ -103,9 +141,10 @@ def build(day: date | None = None, with_stage: bool = True) -> dict:
     day = day or history.last_date() or ledger.today()
     reg = market.last_regime()
     accounts_out: list[dict] = []
+    mf_accounts: set[str] = _mf_follow_accounts()
     for acc in ledger.list_accounts():
         with ledger.connect() as c:
-            acts = position_actions(c, acc["id"], day, with_stage)
+            acts = position_actions(c, acc["id"], day, with_stage, mf_follow=acc["id"] in mf_accounts)
             snap = engine.snapshot(c, acc["id"])
         accounts_out.append({"id": acc["id"], "name": acc["name"], "kind": acc["kind"], "broker": acc["broker"],
                              "total": snap["total"], "cash": snap["cash"], "market_value": snap["market_value"],
@@ -114,7 +153,7 @@ def build(day: date | None = None, with_stage: bool = True) -> dict:
     res: dict = {
         "date": str(day), "generated_at": datetime.now(config.CHINA_TZ).strftime("%Y-%m-%d %H:%M"),
         "regime": {k: reg.get(k) for k in ("label", "cap", "advice", "tone", "date")} if reg else None,
-        "accounts": accounts_out, "candidates": candidates(),
+        "accounts": accounts_out, "candidates": candidates(), "mf_rebalance": mf_rebalance(day),
         "note": "候选买入只是“符合方案、排名靠前”的股票，需要你逐只看诊断后在“交易”页确认才会下单；"
                 "这些候选来自选股器方案，它们的历史回测都没有显著跑赢随机，仓位宁小勿大；"
                 "样本外显著跑赢随机的是“量化选股”页面的每周组合。",

@@ -1,6 +1,7 @@
 """
 策略模板：每个模板说明"用什么选股、怎么买、怎么卖、适合谁"。参数都可以在页面上改（resolve 合并并校验）。
-历史回测结论写在各自的说明里；没有一个模板被标成"推荐"——以你自己点的回测（样本外、和随机比）为准。
+历史回测结论写在各自的说明里；只有样本外显著跑赢同池随机的才标 verified（目前只有"量化选股 每周调仓"）。
+信号类型：scheme（选股器方案）/ model（模型实验室启用的模型）/ mf（量化选股的每周组合：规则固定，回测就是量化选股页的回测）。
 """
 from __future__ import annotations
 
@@ -20,6 +21,14 @@ TRAIL: dict[str, str] = {
 }
 
 TEMPLATES: dict[str, dict[str, Any]] = {
+    "mf_weekly": {
+        "name": "量化选股 每周调仓", "signal": {"type": "mf"}, "fixed": True, "verified": True,
+        "who": "想用样本外验证过的方法、每周只花一次时间的人", "defaults": {"entry": "open", "trail": "none", "target_r": 0.0, "max_days": 250,
+                                                              "max_positions": 50, "exit_distribution": False, "regime": False},
+        "desc": "跟随“量化选股”页的每周组合（多因子 + LightGBM，50 只等权）：每周最后一个交易日收盘后定组合，"
+                "下一个交易日开盘卖掉掉出组合的、买入新进组合的；单只不设止损、周中不换股——和量化选股的回测完全同一套规则。"
+                "这是目前唯一在样本外显著跑赢同池随机的方法。",
+    },
     "reversal_value": {
         "name": "反转 + 低估值 波段", "signal": {"type": "scheme", "scheme_id": "reversal_value"},
         "who": "只能晚上看盘、想少折腾的人", "defaults": {"entry": "open", "trail": "breakeven", "target_r": 2.0, "max_days": 20,
@@ -69,6 +78,8 @@ def resolve(template_id: str, params: dict | None = None) -> dict:
     if template_id not in TEMPLATES:
         raise ValueError(f"不认识的策略模板「{template_id}」")
     t: dict = TEMPLATES[template_id]
+    if t.get("fixed"):                                     # 规则固定的模板（量化选股）：参数不能改，回测才对得上
+        return {"template": template_id, "name": t["name"], "signal": dict(t["signal"]), **t["defaults"]}
     p: dict = {**t["defaults"], **{k: v for k, v in (params or {}).items() if k in t["defaults"] and v is not None}}
     if p["entry"] not in ENTRY:
         raise ValueError("买入方式不对")
@@ -88,5 +99,5 @@ def resolve(template_id: str, params: dict | None = None) -> dict:
 
 
 def listing() -> list[dict]:
-    return [{"id": k, "name": v["name"], "who": v["who"], "desc": v["desc"], "signal": v["signal"], "defaults": v["defaults"]}
-            for k, v in TEMPLATES.items()]
+    return [{"id": k, "name": v["name"], "who": v["who"], "desc": v["desc"], "signal": v["signal"], "defaults": v["defaults"],
+             "fixed": bool(v.get("fixed")), "verified": bool(v.get("verified"))} for k, v in TEMPLATES.items()]

@@ -53,8 +53,10 @@ def available_cash(conn: sqlite3.Connection, account_id: str) -> float:
 
 
 def place(conn: sqlite3.Connection, account_id: str, req: OrderRequest, *, status: str | None = None,
-          ref_price: float | None = None, trade_date: date | None = None) -> dict:
-    """写入一笔委托（风控检查由调用方先做）；买单冻结资金"""
+          ref_price: float | None = None, trade_date: date | None = None, credit: float = 0.0) -> dict:
+    """写入一笔委托（风控检查由调用方先做）；买单冻结资金。
+    credit：同一个开盘先卖后买的换仓（量化选股组合调仓）——允许买单按"卖出后预计回笼的资金"下单；
+    这种买单撮合时再核对一次现金（卖出没成交、钱不够就不买，当天过期），账户现金不会变成负数"""
     acc = ledger.one(conn, "SELECT * FROM accounts WHERE id=?", (account_id,))
     if acc is None:
         raise ValueError("没有这个账户")
@@ -81,8 +83,11 @@ def place(conn: sqlite3.Connection, account_id: str, req: OrderRequest, *, statu
         if err:
             raise ValueError(err)
     freeze: float = _freeze_amount(req, ref_price)
-    if req.side == "buy" and freeze > available_cash(conn, account_id) + 1e-6:
+    if req.side == "buy" and freeze > available_cash(conn, account_id) + max(credit, 0.0) + 1e-6:
         raise ValueError(f"可用资金不够：需要约 {freeze:,.0f} 元，可用 {available_cash(conn, account_id):,.0f} 元")
+    if req.side == "buy" and credit > 0:
+        freeze = round(min(freeze, max(available_cash(conn, account_id), 0.0)), 2)   # 超出可用资金的部分等卖出回笼，不冻结
+    flags: dict = {**req.flags, "freeze": freeze, **({"credit": True} if req.side == "buy" and credit > 0 else {})}
     oid: str = ledger.new_id("ord")
     st: str = status or ("waiting_trigger" if req.kind in ("stop", "take_profit") else "submitted")
     td: date = trade_date or tcal.order_trade_date()
@@ -91,7 +96,7 @@ def place(conn: sqlite3.Connection, account_id: str, req: OrderRequest, *, statu
         " reason, plan_id, source, flags) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (oid, account_id, req.code, req.name, req.side, req.kind, req.price, req.trigger, int(req.qty), st,
          req.valid if req.kind in ("limit", "market") else "gtc", td.isoformat(), ledger.now(), ledger.now(), req.reason,
-         req.plan_id, req.source, json.dumps({**req.flags, "freeze": freeze}, ensure_ascii=False)))
+         req.plan_id, req.source, json.dumps(flags, ensure_ascii=False)))
     if freeze:
         conn.execute("UPDATE accounts SET frozen = frozen + ? WHERE id=?", (freeze, account_id))
     ledger.audit(conn, account_id, "place", {"order_id": oid, **req.__dict__})
@@ -176,6 +181,17 @@ def expire_day_orders(conn: sqlite3.Connection, account_id: str, day: date) -> i
     return len(olds)
 
 
+def _credit_ok(conn: sqlite3.Connection, o: dict, qty: int, px: float, day: date) -> bool:
+    """按回笼资金下的买单（flags.credit）：现金（扣掉别的买单冻结的部分）够付这笔才成交"""
+    flags: dict = json.loads(o.get("flags") or "{}")
+    if not flags.get("credit"):
+        return True
+    acc = ledger.one(conn, "SELECT cash, frozen FROM accounts WHERE id=?", (o["account_id"],))
+    mine: float = float(flags.get("freeze") or 0) * (qty / o["qty"])
+    cost: float = qty * px + rules.fees("buy", qty * px, day)["total"]
+    return cost <= float(acc["cash"]) - max(float(acc["frozen"]) - mine, 0.0) + 1e-6
+
+
 def _still_open(conn: sqlite3.Connection, o: dict) -> dict | None:
     """撮合循环开始时读到的委托，轮到它时再看一眼最新状态（已成交 / 已撤的跳过）"""
     cur = ledger.one(conn, "SELECT * FROM orders WHERE id=?", (o["id"],))
@@ -206,6 +222,8 @@ def match_with_bars(conn: sqlite3.Connection, account_id: str, day: date, bars: 
         px = rules.match_bar(o["side"], o["kind"], bar, o["price"], o["trigger"])
         if px is None:
             continue
+        if o["side"] == "buy" and not _credit_ok(conn, o, left, px, day):
+            continue                                                    # 先卖后买的换仓：卖出没回笼够钱，这笔不买（当天过期）
         info = apply_fill(conn, o["id"], account_id, o["code"], o["side"], left, px, day, o.get("name"), "paper_eod", o.get("plan_id"))
         done.append({"order_id": o["id"], "code": o["code"], "side": o["side"], "qty": left, "price": px, **info})
     return done

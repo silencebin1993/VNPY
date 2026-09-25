@@ -87,3 +87,18 @@
 .mf-traits span { font-size: 12px; color: var(--text-3); }
 .mf-traits b { font-size: 16px; }
 .mf-traits small { font-size: 11.5px; color: var(--text-3); line-height: 1.4; }
+
+/* 顶部：这个功能的目标 + 每周三件事 */
+.mf-goal { display: flex; flex-direction: column; gap: 10px; }
+.mf-goal-hd { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; font-size: 13.5px; line-height: 1.7; }
+.mf-goal-hd > .qw-icon { flex: none; margin-top: 4px; color: var(--primary); }
+.mf-goal-hd > b { flex: none; }
+.mf-goal-hd > span { flex: 1; min-width: 280px; color: var(--text-2); }
+/* 主力阶段对照 */
+.mf-stage-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .mf-stage-grid { grid-template-columns: minmax(0, 1fr); } }
+.mf-stage-text p { margin: 0 0 8px; font-size: 13.5px; line-height: 1.75; }
+.mf-stage-do { display: flex; gap: 6px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--primary-weak); }
+.mf-stage-do .qw-icon { flex: none; margin-top: 5px; color: var(--primary); }
+.mf-stage .mf-scroll { overflow-x: auto; }
+.mf-stage th { vertical-align: bottom; line-height: 1.35; }

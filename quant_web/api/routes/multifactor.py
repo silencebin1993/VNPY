@@ -31,6 +31,17 @@ def mf_today() -> Any:
     })
 
 
+@router.get("/api/mf/membership")
+def mf_membership() -> Any:
+    """诊断页用：最新一期量化选股组合里有哪些股票（和排名）"""
+    today = _svc().load_today()
+    if not today:
+        return ok({"date": None, "target": [], "ranks": {}})
+    ranks = {r["code"]: r["rank"] for r in today.get("rows") or []}
+    return ok({"date": today["date"], "rebalance_day": today.get("rebalance_day"), "target": today.get("target") or [],
+               "ranks": {c: ranks.get(c) for c in today.get("target") or []}})
+
+
 @router.get("/api/mf/report")
 def mf_report() -> Any:
     rep = _svc().load_report()

@@ -72,6 +72,7 @@
         applyQuery(props.query);
       });
       QW.usePoll(() => { if (tab.value === "overview" && accId.value && store.status && store.status.market_open) loadDetail(); }, 30000);
+      QW.onReturn(refreshAll);                 // 从别的页面切回来：账户和持仓重新读一遍（钱的数字不能是旧的）
 
       // ---------------------------------------------------------- 账户
       const newOpen = ref(false);
@@ -244,6 +245,7 @@
       const applyQuery = (q) => {
         if (!q) return;
         if (q.tab) tab.value = q.tab;
+        if (q.acc && accounts.value.some((a) => a.id === q.acc)) { accId.value = q.acc; if (!q.tab) tab.value = "overview"; }   // 策略中心"去看模拟账户"
         if (!q.code) return;
         Object.assign(ticket, { code: String(q.code), name: q.name || "", side: q.side === "sell" ? "sell" : "buy", kind: "limit",
           price: q.price ? Number(q.price) : null, qty: q.qty ? Number(q.qty) : null, stop: q.stop ? Number(q.stop) : null,
@@ -583,6 +585,18 @@
           <qw-empty v-else compact icon="calendar" title="还没有明日计划" desc="点“重新生成”，或等今天收盘后的每日更新。"/>
         </qw-card>
         <template v-if="nightly">
+          <qw-card v-if="nightly.mf_rebalance" title="量化选股：本周调仓" icon="target" :sub="'下一个交易日（' + (nightly.mf_rebalance.next_trade_day || '') + '）开盘执行'">
+            <div class="td-mf">
+              <p class="text-2" style="margin:0">今天是调仓日：{{ nightly.mf_rebalance.n }} 只的组合里，<b>继续持有 {{ nightly.mf_rebalance.keep }} 只</b>，
+                <b class="down">卖出 {{ nightly.mf_rebalance.sells.length }} 只</b>，<b class="up">买入 {{ nightly.mf_rebalance.buys.length }} 只</b>。
+                按你的资金算好的股数在量化选股页的“下单清单”；开在策略中心的“量化选股 每周调仓”模拟账户会自动照做。</p>
+              <div class="td-mf-cols">
+                <div><b class="down">卖出</b><div class="td-mf-list"><a v-for="x in nightly.mf_rebalance.sells" :key="x.code" class="chip sm" :href="'#/watch/' + x.code">{{ x.name || x.code }}</a><span v-if="!nightly.mf_rebalance.sells.length" class="muted">没有</span></div></div>
+                <div><b class="up">买入</b><div class="td-mf-list"><a v-for="x in nightly.mf_rebalance.buys" :key="x.code" class="chip sm" :href="'#/watch/' + x.code">{{ x.name || x.code }}</a><span v-if="!nightly.mf_rebalance.buys.length" class="muted">没有</span></div></div>
+              </div>
+              <div class="row"><a class="btn sm primary" href="#/mf">去看下单清单</a><a class="btn sm" href="#/strategy?tpl=mf_weekly">在模拟账户里自动跟踪</a></div>
+            </div>
+          </qw-card>
           <qw-card v-for="a in nightly.accounts" :key="a.id" :title="(a.kind === 'live' ? '【实盘】' : '【模拟】') + a.name" icon="briefcase" :pad="false"
             :sub="'总资产 ' + $fmt.money(a.total) + ' · 仓位 ' + $fmt.ratio(a.exposure, 0)">
             <qw-table v-if="a.positions.length" :rows="a.positions" row-key="code" dense

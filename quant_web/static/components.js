@@ -363,6 +363,16 @@
   // ------------------------------------------------------------------ 主力阶段
   const STAGE_ORDER = ["accumulation", "washout", "markup", "distribution", "decline"];
   const STAGE_LABEL = { accumulation: "吸筹", washout: "洗盘", markup: "拉升", distribution: "出货", decline: "下跌", unclear: "不明确" };
+  // 最新一期量化选股组合（诊断页的主力阶段卡用），缓存 10 分钟
+  let mfMem = null;
+  let mfMemAt = 0;
+  function mfMembership() {
+    if (!mfMem || Date.now() - mfMemAt > 600000) {
+      mfMemAt = Date.now();
+      mfMem = QW.api.get("/api/mf/membership", null, { silent: true }).catch(() => { mfMemAt = 0; return null; });
+    }
+    return mfMem;
+  }
   const StageCard = {
     name: "QwStageCard",
     props: { diag: { type: Object, default: null }, loading: Boolean, error: { type: String, default: "" } },
@@ -370,6 +380,13 @@
     setup(props, { emit }) {
       const showAll = Vue.ref(false);
       const jobId = Vue.ref("");
+      // 这只股票在不在最新一期量化选股组合里：在的话，提醒不要按主力阶段取舍（组合按整体操作）
+      const mf = Vue.ref(null);
+      mfMembership().then((m) => { mf.value = m; });
+      const inMf = computed(() => {
+        const code = props.diag && props.diag.code;
+        return code && mf.value && mf.value.target.includes(code) ? { rank: mf.value.ranks[code], date: mf.value.date } : null;
+      });
       const st = computed(() => (props.diag ? props.diag.stage : null));
       const scores = computed(() => (st.value ? STAGE_ORDER.map((k) => ({ key: k, label: STAGE_LABEL[k], score: st.value.scores[k], pre: st.value.prereq[k] })) : []));
       const hist = computed(() => (st.value && st.value.history ? st.value.history[st.value.key] : null));
@@ -384,7 +401,7 @@
       const cls = (e) => (e.missing ? "miss" : e.ok ? "yes" : "no");
       const pct = (v) => (isNum(v) ? Math.round(v * 100) + "%" : "—");
       const STAGE_HELP = (QW.term && QW.term("主力")) || "";
-      return { st, scores, hist, anyHist, showAll, runStats, jobId, icon, cls, pct, STAGE_LABEL, STAGE_ORDER, STAGE_HELP };
+      return { st, scores, hist, anyHist, showAll, runStats, jobId, icon, cls, pct, STAGE_LABEL, STAGE_ORDER, STAGE_HELP, inMf };
     },
     template: `<qw-card class="st-card" title="主力阶段" icon="compass" :help="STAGE_HELP" :loading="loading && !diag">
       <qw-empty v-if="error && !diag" compact icon="alert" title="诊断暂时做不了" :desc="error"/>
@@ -395,6 +412,9 @@
         </div>
         <p class="st-desc">{{ st.desc }}</p>
         <div class="st-advice" :class="'t-' + st.tone"><qw-icon name="info" :size="15"/><span>{{ st.advice }}</span></div>
+        <div v-if="inMf" class="st-advice t-good"><qw-icon name="target" :size="15"/><span>它在 {{ inMf.date }} 的<a href="#/mf">量化选股</a>组合里（排第 {{ inMf.rank || '—' }} 名）。
+          量化选股按 50 只整体操作，<b>不要按主力阶段取舍</b>：组合专门挑最近跌过、冷门、波动小的股票，所以常显示为洗盘 / 吸筹 / 下跌；
+          历史上组合里这些股票下一周整体仍跑赢同池，反而“拉升”股下一周平均最差。</span></div>
         <div v-if="hist" class="st-hist" :class="{weak: !hist.credible}"><qw-icon name="target" :size="14"/><span>{{ hist.text }}</span></div>
         <div v-else-if="!anyHist" class="st-hist weak"><qw-icon name="target" :size="14"/>
           <span>还没有做历史验证，不知道这些阶段判断之后的真实表现。<button class="linkbtn" @click="runStats">开始验证（约几分钟）</button></span></div>

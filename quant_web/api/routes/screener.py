@@ -36,6 +36,8 @@ def screener_schemes() -> Any:
     lib = mod("formula.library")
     fstore = mod("formula.store")
     profile, _ = _profile_risk()
+    # 用这个方案选股的策略模板（选股器 → 策略中心的"做成策略"链接）
+    tpl_of: dict = {t["signal"].get("scheme_id"): k for k, t in mod("strategy.templates").TEMPLATES.items() if t["signal"]["type"] == "scheme"}
     items: list[dict] = []
     for sc in store.all_schemes():
         try:
@@ -48,7 +50,7 @@ def screener_schemes() -> Any:
         # 发给前端的是规范化后的方案（v）：内置方案里的"主力阶段"条件可能只写了 include 或 exclude 之一，
         # 规范化会补成空列表；直接发原始 sc 会让"修改条件"编辑器读 undefined.includes 报错
         items.append({**sc, **v, "backtest": {"verdict": bt["verdict"], "saved_at": bt.get("saved_at"), "key": bt.get("key")} if bt else None,
-                      "latest_date": latest.get("date") if latest else None})
+                      "latest_date": latest.get("date") if latest else None, "strategy_template": tpl_of.get(sc["id"])})
     return ok({
         "schemes": items, "fields": {k: {"label": v[0], "unit": v[1], "scale": S.DISPLAY_SCALE.get(k, 1)} for k, v in S.FIELDS.items()},
         "ops": S.OPS, "scoring": {k: {"name": v["name"], "desc": v["desc"], "weights": v["weights"]} for k, v in S.SCORING.items()},
