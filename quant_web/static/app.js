@@ -105,18 +105,33 @@
   const KIND_VALUES = KINDS.map((k) => k.value);
   const kindInfo = (k) => KINDS.find((x) => x.value === k) || null;
   const kindLabel = (k) => (kindInfo(k) || { label: k || "—" }).label;
-  const ROUTES = [
-    { name: "dashboard", path: "/", title: "市场情绪", icon: "pulse", tab: true },
-    { name: "watch", path: "/watch/:code?", nav: "/watch", title: "看盘", icon: "candle", tab: true },
-    { name: "predict", path: "/predict", title: "短线预测", icon: "rocket", tab: true },
-    { name: "paper", path: "/paper", title: "模拟盘", icon: "clipboard" },
-    { name: "watchlist", path: "/watchlist", title: "自选股", icon: "star", tab: true },
-    { name: "news", path: "/news", title: "消息政策", icon: "news" },
-    { name: "settings", path: "/settings", title: "预测设置", icon: "sliders", sep: true },
-    { name: "model", path: "/model", title: "模型中心", icon: "cpu" },
-    { name: "etf", path: "/etf", title: "稳健ETF", icon: "shield" },
-    { name: "data", path: "/data", title: "数据中心", icon: "database" },
+  // 导航分组（电脑侧栏显示组标题；手机“更多”里按组排列）。route.group 对应这里的 key
+  const NAV_GROUPS = [
+    { key: "market", title: "行情" },
+    { key: "pick", title: "选股" },
+    { key: "strategy", title: "策略" },
+    { key: "trade", title: "交易" },
+    { key: "more", title: "更多" },
   ];
+  const ROUTES = [
+    { name: "dashboard", path: "/", title: "市场情绪", icon: "pulse", tab: true, group: "market" },
+    { name: "watch", path: "/watch/:code?", nav: "/watch", title: "看盘", icon: "candle", tab: true, group: "market" },
+    { name: "watchlist", path: "/watchlist", title: "自选股", icon: "star", tab: true, group: "market" },
+    { name: "news", path: "/news", title: "消息政策", icon: "news", group: "market" },
+    { name: "formula", path: "/formula", title: "公式库", icon: "sigma", group: "pick" },
+    { name: "predict", path: "/predict", title: "短线观察", icon: "rocket", tab: true, group: "strategy" },
+    { name: "model", path: "/model", title: "模型中心", icon: "cpu", group: "strategy" },
+    { name: "settings", path: "/settings", title: "预测设置", icon: "sliders", group: "strategy" },
+    { name: "paper", path: "/paper", title: "策略跟踪", icon: "clipboard", group: "trade" },
+    { name: "etf", path: "/etf", title: "稳健ETF", icon: "shield", group: "more" },
+    { name: "data", path: "/data", title: "数据中心", icon: "database", group: "more" },
+    { name: "sources", path: "/sources", title: "数据源", icon: "plug", group: "more" },
+    { name: "guide", path: "/guide", title: "新手指南", icon: "book", group: "more" },
+  ];
+  // 按组整理（hidden 的路由可以访问但不出现在导航里）
+  const groupRoutes = (list) => NAV_GROUPS
+    .map((g) => ({ ...g, routes: list.filter((r) => (r.group || "more") === g.key && !r.hidden) }))
+    .filter((g) => g.routes.length);
 
   const ICONS = {
     pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
@@ -166,6 +181,27 @@
     clipboard: '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/>',
     pause: '<circle cx="12" cy="12" r="10"/><path d="M10 15V9M14 15V9"/>',
     play: '<circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4V8z"/>',
+    // 第三版新增
+    plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+    book: '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+    bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+    flask: '<path d="M9 3h6"/><path d="M10 9V3h4v6l5 9a2 2 0 0 1-1.7 3H6.7A2 2 0 0 1 5 18l5-9Z"/><path d="M7.5 15h9"/>',
+    sigma: '<path d="M18 7V4H6l6 8-6 8h12v-3"/>',
+    compass: '<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>',
+    layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+    listCheck: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+    calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
+    lock: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    briefcase: '<rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
+    eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+    gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+    zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+    stop: '<polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/>',
+    scale: '<path d="M12 3v18"/><path d="M5 21h14"/><path d="M3 7h18"/><path d="M6 7l-3 7a3 3 0 0 0 6 0Z"/><path d="M18 7l-3 7a3 3 0 0 0 6 0Z"/>',
   };
 
   // ------------------------------------------------------------------ 全局状态
@@ -173,6 +209,7 @@
     status: null, phase: "", dataDate: "", theme: "light", themePref: "auto",
     width: window.innerWidth, jobs: {}, watchCodes: [], watchList: [], offline: false,
     clock: "", today: "", pageTitle: "",
+    profile: null, needOnboard: false,      // 第三版：settings.profile；还没完成新手向导时显示提醒条
   });
   const isPhone = computed(() => store.width < 700);
   const isNarrow = computed(() => store.width < 1100);
@@ -1608,9 +1645,10 @@
     setup() {
       const moreOpen = ref(false);
       const searchOpen = ref(false);
-      const navRoutes = ROUTES;
-      const tabRoutes = ROUTES.filter((r) => r.tab);
-      const moreRoutes = ROUTES.filter((r) => !r.tab);
+      const navGroups = groupRoutes(ROUTES);
+      const tabRoutes = ROUTES.filter((r) => r.tab && !r.hidden);
+      const moreRoutes = ROUTES.filter((r) => !r.tab && !r.hidden);
+      const moreGroups = groupRoutes(moreRoutes);
       const pageComp = computed(() => {
         if (route.name === "notfound") return NotFound;
         return QW.pages[route.name] || Placeholder;
@@ -1632,20 +1670,27 @@
         try { await jobs.start("/api/jobs/daily", {}, "一键更新"); } catch (e) { /* 已提示 */ }
       };
       const moreActive = computed(() => moreRoutes.some((r) => r.name === route.name));
+      const readHidden = () => { try { return sessionStorage.getItem("qw-onboard-later") === "1"; } catch (e) { return false; } };
+      const onboardHidden = ref(readHidden());
+      const hideOnboard = () => {
+        onboardHidden.value = true;
+        try { sessionStorage.setItem("qw-onboard-later", "1"); } catch (e) { /* 忽略 */ }
+      };
       watch(() => route.path, () => { moreOpen.value = false; searchOpen.value = false; });
       const tipRef = (el) => { tipEl = el; };
       return {
-        store, route, tip, tipRef, toastState, closeToast, navRoutes, tabRoutes, moreRoutes, pageComp, pageKey, pageTitle,
+        store, route, tip, tipRef, toastState, closeToast, navGroups, tabRoutes, moreRoutes, moreGroups, pageComp, pageKey, pageTitle,
         phaseCls, running, runPct, runTip, updating, oneClick, toggleTheme, moreOpen, searchOpen, moreActive, fmt,
+        onboardHidden, hideOnboard,
       };
     },
     template: `<div class="qw-app">
       <aside v-if="!store.isPhone" class="qw-side">
         <a class="qw-logo" href="#/"><span class="qw-logo-mark"><qw-icon name="trend" :size="19"/></span><span class="qw-logo-text">量化助手</span></a>
         <nav class="qw-nav" aria-label="主导航">
-          <template v-for="r in navRoutes" :key="r.name">
-            <div v-if="r.sep" class="qw-nav-sep"></div>
-            <a :href="'#' + (r.nav || r.path)" class="qw-nav-item" :class="{active: route.name === r.name}" v-tip.right="store.isNarrow ? r.title : ''"><qw-icon :name="r.icon" :size="19"/><span>{{ r.title }}</span></a>
+          <template v-for="(g, gi) in navGroups" :key="g.key">
+            <div class="qw-nav-group" :class="{first: gi === 0}">{{ g.title }}</div>
+            <a v-for="r in g.routes" :key="r.name" :href="'#' + (r.nav || r.path)" class="qw-nav-item" :class="{active: route.name === r.name}" v-tip.right="store.isNarrow ? r.title : ''"><qw-icon :name="r.icon" :size="19"/><span>{{ r.title }}</span></a>
           </template>
         </nav>
         <div class="qw-side-ft">数据仅供学习研究<br>不构成投资建议</div>
@@ -1669,6 +1714,10 @@
           <div v-if="running.length" class="qw-top-progress" :class="{indet: runPct < 2}" v-tip="runTip"><i :style="{width: runPct + '%'}"></i></div>
         </header>
         <div v-if="store.offline" class="qw-offline"><qw-icon name="alert" :size="16"/>连接不到本地服务，请确认“量化助手”程序还开着（关掉黑色窗口会停止服务）。</div>
+        <div v-if="store.needOnboard && !onboardHidden && route.name !== 'guide'" class="qw-onboard">
+          <qw-icon name="book" :size="16"/><span>第一次使用？花 1 分钟完成新手向导：告诉程序你的资金、能买的板块和风险承受度，它会据此给出仓位和止损建议。</span>
+          <a class="btn sm primary" href="#/guide">去设置</a><button class="btn sm ghost" @click="hideOnboard">以后再说</button>
+        </div>
         <main class="qw-content"><component :is="pageComp" :key="pageKey" :params="route.params" :query="route.query"/></main>
       </div>
       <nav v-if="store.isPhone" class="qw-tabbar" aria-label="主导航">
@@ -1676,9 +1725,12 @@
         <button :class="{active: moreActive}" @click="moreOpen = true"><qw-icon name="grid" :size="21"/>更多</button>
       </nav>
       <qw-drawer v-model="moreOpen" title="更多功能">
-        <div class="qw-more-list">
-          <a v-for="r in moreRoutes" :key="r.name" :href="'#' + (r.nav || r.path)" :class="{active: route.name === r.name}"><qw-icon :name="r.icon" :size="22"/>{{ r.title }}</a>
-        </div>
+        <template v-for="g in moreGroups" :key="g.key">
+          <div class="qw-more-group">{{ g.title }}</div>
+          <div class="qw-more-list">
+            <a v-for="r in g.routes" :key="r.name" :href="'#' + (r.nav || r.path)" :class="{active: route.name === r.name}"><qw-icon :name="r.icon" :size="22"/>{{ r.title }}</a>
+          </div>
+        </template>
         <div class="section-gap row between"><span class="muted">深色模式</span><button class="btn sm" @click="toggleTheme">{{ store.theme === 'dark' ? '切换到浅色' : '切换到深色' }}</button></div>
         <p class="muted section-gap" style="font-size:12px">北京时间 {{ store.clock }} · 数据 {{ fmt.cnDate(store.dataDate) }}<br>数据仅供学习研究，不构成投资建议。</p>
       </qw-drawer>
@@ -1714,7 +1766,7 @@
   // ------------------------------------------------------------------ 导出与启动
   Object.assign(QW, {
     api, toast, fmt, store, route, go, setTitle, bus, jobs, watch: watchApi, recent, usePoll, colors, tooltipBase, axisBase,
-    refreshStatus, LABELS, DIM_HELP, BOARDS, ROUTES, ICONS, tip: { show: showTip, hide: hideTip }, isNum, ONE_WORD_TIP, AP_PRICE, AP_VOL,
+    refreshStatus, LABELS, DIM_HELP, BOARDS, ROUTES, NAV_GROUPS, ICONS, tip: { show: showTip, hide: hideTip }, isNum, ONE_WORD_TIP, AP_PRICE, AP_VOL,
     KINDS, KIND_VALUES, kindInfo, kindLabel, normTrade, tWord, T_HELP, T_NW_NOTE, OOS_CAVEAT, tHelp, SKIP_HEAVY, UNCAPPED_HELP, BASE_HELP, MATCH_HELP, TUNED_HELP,
     fillPct, spanMonths, holdLabel, recentVerdict, HOLD_CAVEAT,
   });
@@ -1744,6 +1796,10 @@
     setInterval(tickClock, 1000);
     window.addEventListener("resize", () => { store.width = window.innerWidth; hideTip(); });
     refreshStatus();
+    api.get("/api/settings", null, { silent: true }).then((s) => {
+      store.profile = (s && s.profile) || null;
+      store.needOnboard = !!(store.profile && !store.profile.onboarded);
+    }).catch(() => { /* 读不到设置时不提醒 */ });
     statusTimer = setInterval(() => { if (!document.hidden) refreshStatus(); }, 30000);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshStatus(); });
     watchApi.refresh();

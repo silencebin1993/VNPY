@@ -190,6 +190,8 @@ ul { margin: 0; padding: 0; list-style: none; }
 .qw-logo-text { font-size: 17px; font-weight: 700; letter-spacing: 1px; white-space: nowrap; }
 .qw-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
 .qw-nav-sep { height: 1px; background: var(--border); margin: 8px 10px; }
+.qw-nav-group { font-size: 11.5px; font-weight: 600; color: var(--text-3); letter-spacing: .12em; padding: 12px 12px 4px; }
+.qw-nav-group.first { padding-top: 2px; }
 .qw-nav-item {
   display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px;
   color: var(--text-2); font-size: 14.5px; white-space: nowrap; transition: background .15s, color .15s;
@@ -254,6 +256,8 @@ ul { margin: 0; padding: 0; list-style: none; }
   background: var(--surface-2); color: var(--text); font-size: 13px; border: 1px solid var(--border);
 }
 .qw-more-list a.active { color: var(--primary); border-color: var(--primary); }
+.qw-more-group { font-size: 12.5px; font-weight: 600; color: var(--text-3); letter-spacing: .1em; margin: 14px 2px 8px; }
+.qw-more-group:first-child { margin-top: 0; }
 
 /* 响应式：窄屏只显示图标；手机隐藏侧栏 */
 @media (max-width: 1280px) {
@@ -264,6 +268,8 @@ ul { margin: 0; padding: 0; list-style: none; }
   .qw-side { padding: 14px 10px; align-items: center; }
   .qw-logo { padding: 4px 0 16px; }
   .qw-logo-text, .qw-nav-item span, .qw-side-ft { display: none; }
+  .qw-nav-group { font-size: 0; height: 1px; padding: 0; margin: 8px 6px; background: var(--border); letter-spacing: 0; }
+  .qw-nav-group.first { display: none; }
   .qw-nav-item { justify-content: center; padding: 10px; }
   .qw-top { padding: 0 16px; gap: 12px; }
   .qw-content { padding: 16px 16px 40px; }

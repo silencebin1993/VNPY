@@ -52,6 +52,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/v3.css">
 </head>
 <body>
   <div id="app"><div class="qw-boot">正在加载量化助手…</div></div>
@@ -60,6 +61,9 @@
   <script src="/static/vendor/vue.global.prod.js"></script>
   <script src="/static/vendor/echarts.min.js"></script>
   <script src="/static/app.js"></script>
+  <!-- 第三版：名词解释与共享组件（app.js 之后、页面之前加载；组件经 QW.extraComponents 注册） -->
+  <script src="/static/glossary.js"></script>
+  <script src="/static/components.js"></script>
   <!-- 页面组件：每个文件调用 QW.page(name, component) 注册；缺失的页面显示"建设中" -->
   <script src="/static/pages/dashboard.js"></script>
   <script src="/static/pages/watch.js"></script>
@@ -71,5 +75,8 @@
   <script src="/static/pages/model.js"></script>
   <script src="/static/pages/etf.js"></script>
   <script src="/static/pages/data.js"></script>
+  <script src="/static/pages/sources.js"></script>
+  <script src="/static/pages/guide.js"></script>
+  <script src="/static/pages/formula.js"></script>
 </body>
 </html>

@@ -90,6 +90,23 @@
       const minuteErr = ref("");
       const minute5 = ref(null);
       const minute5Err = ref("");
+      // 第三版：指标选择（记在浏览器里）+ 筹码分布
+      const readList = (k, d) => {
+        try { const v = JSON.parse(localStorage.getItem(k)); return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : d; } catch (e) { return d; }
+      };
+      const indMain = ref(readList("qw-ind-main", ["ma"]));
+      const indSubs = ref(readList("qw-ind-subs", ["vol", "macd"]));
+      const indCatalog = ref(QW.indCatalog || []);
+      const pickerOpen = ref(false);
+      const showCost = ref(false);
+      const loadCatalog = async () => {
+        if (QW.indCatalog) { indCatalog.value = QW.indCatalog; return; }
+        try {
+          const r = await api.get("/api/indicators/catalog", null, { silent: true });
+          QW.indCatalog = r.items || [];
+          indCatalog.value = QW.indCatalog;
+        } catch (e) { /* 目录取不到时只是不能换指标 */ }
+      };
 
       const loadQuote = async () => {
         try {
@@ -117,13 +134,51 @@
           gateData.value = d && d.gate && typeof d.gate === "object" ? d.gate : null;
         } catch (e) { gateData.value = null; }
       };
+      // K 线 + 所选指标 + 筹码（日线）一次取回（/api/stock/{code}/chart，字段兼容原来的 /kline）
       const loadKline = async (period) => {
         const count = period === "day" ? 600 : period === "week" ? 400 : 240;
+        const ind = [...new Set([...indMain.value, ...indSubs.value])].join(",");
         try {
-          klines[period] = await api.get(`/api/stock/${code}/kline`, { period, adjust: "qfq", count }, { silent: true });
+          klines[period] = await api.get(`/api/stock/${code}/chart`, { period, count, ind, chips: period === "day" }, { silent: true });
           klineErr[period] = "";
         } catch (e) { klineErr[period] = e.detail || e.message; }
       };
+      let indTimer = null;
+      watch([indMain, indSubs], ([m, s]) => {
+        try { localStorage.setItem("qw-ind-main", JSON.stringify(m)); localStorage.setItem("qw-ind-subs", JSON.stringify(s)); } catch (e) { /* 忽略 */ }
+        clearTimeout(indTimer);
+        indTimer = setTimeout(() => {
+          ["day", "week", "month"].forEach((p) => { if (p !== tab.value && p !== "day") klines[p] = null; });
+          if (["day", "week", "month"].includes(tab.value)) loadKline(tab.value);
+          if (tab.value !== "day") loadKline("day");
+        }, 250);
+      });
+      onBeforeUnmount(() => clearTimeout(indTimer));
+      const dayChips = computed(() => (klines.day && klines.day.chips && klines.day.chips.dist && klines.day.chips.dist.prices.length ? klines.day.chips : null));
+      // 筹码的白话解读
+      const chipsText = computed(() => {
+        const ch = dayChips.value;
+        if (!ch) return [];
+        const l = ch.last || {};
+        const px = isNum(q.value.price) ? q.value.price : null;
+        const out = [];
+        if (isNum(l.winner)) {
+          const w = Math.round(l.winner * 100);
+          if (l.winner >= 0.9) out.push(`约 ${w}% 的持股人处于盈利状态，获利盘很多，继续上涨时可能有人兑现利润。`);
+          else if (l.winner <= 0.1) out.push(`只有约 ${w}% 的持股人在赚钱，大部分人被套；股价反弹到平均成本附近时，容易遇到“解套就卖”的抛压。`);
+          else out.push(`约 ${w}% 的持股人处于盈利状态。`);
+        }
+        if (isNum(l.avg_cost) && px) {
+          const d = px / l.avg_cost - 1;
+          out.push(`现价${d >= 0 ? "高于" : "低于"}估算的平均成本 ${Math.abs(d * 100).toFixed(1)}%。`);
+        }
+        if (isNum(l.conc90)) {
+          if (l.conc90 < 0.1) out.push("筹码高度集中：90% 的筹码挤在很窄的价格范围里，常见于长期横盘或主力控盘。");
+          else if (l.conc90 > 0.3) out.push("筹码比较分散：持股人的成本差别很大。");
+        }
+        return out;
+      });
+
       const loadMinute = async () => {
         try {
           minute.value = await api.get(`/api/stock/${code}/minute`, null, { silent: true });
@@ -146,7 +201,10 @@
       watch(() => store.phase, (ph) => {
         if (!userPicked.value && ["交易中", "午间休市"].includes(ph)) tab.value = "minute";
       });
-      onMounted(() => { loadQuote(); loadProfile(); ensureTab(tab.value); });
+      onMounted(() => {
+        loadQuote(); loadProfile(); ensureTab(tab.value); loadCatalog();
+        if (tab.value !== "day") setTimeout(() => { if (!klines.day) loadKline("day"); }, 600);   // 筹码卡片需要日线
+      });
       let pollN = 0;
       usePoll(() => {
         loadQuote();
@@ -310,6 +368,7 @@
         tabModel, book, kl, q, name, board, isST, dir, isLimitUp, isLimitDown, grid, inWatch, toggleWatch, chartH, pred, predScore, reasonCls, reasonIcon,
         pf, fin, val, concepts, conceptsOpen, errText, lhist, lhistSummary, flowOption, retryAll, loadKline, loadMinute, isNum,
         minute5, minute5Err, loadMinute5, fiveOpt, isOneWord, newsBoost, ONE_WORD_TIP: QW.ONE_WORD_TIP, pillText, pillTip, quoteWhen, plainReason, swingGate,
+        indMain, indSubs, indCatalog, pickerOpen, showCost, dayChips, chipsText, CHIPS_HELP: QW.term ? QW.term("筹码分布") : "",
       };
     },
     template: `<div>
@@ -368,7 +427,15 @@
                 <qw-skeleton v-else :height="chartH"/>
               </template>
               <template v-else>
-                <qw-kline v-if="klines[tab] && klines[tab].bars && klines[tab].bars.length" :key="tab" :bars="klines[tab].bars" :limit-days="klines[tab].limit_days || []" :period="tab" :height="chartH" :initial-bars="tab === 'day' ? 120 : 80"/>
+                <div class="ind-bar">
+                  <button class="btn sm" :class="{soft: pickerOpen}" @click="pickerOpen = !pickerOpen"><qw-icon name="sliders" :size="14"/>指标</button>
+                  <span class="muted ind-cur">{{ indCatalog.filter((x) => indMain.includes(x.id) || indSubs.includes(x.id)).map((x) => x.name).join(' · ') }}</span>
+                  <label v-if="tab === 'day'" class="ind-cost"><input type="checkbox" v-model="showCost">平均成本线<qw-help :text="CHIPS_HELP"/></label>
+                </div>
+                <qw-ind-picker v-if="pickerOpen" v-model:main="indMain" v-model:subs="indSubs" :catalog="indCatalog"/>
+                <qw-kline-pro v-if="klines[tab] && klines[tab].bars && klines[tab].bars.length" :key="tab" :bars="klines[tab].bars" :indicators="klines[tab].indicators || {}"
+                  :main="indMain" :subs="indSubs" :chips="klines[tab].chips" :show-cost="showCost && tab === 'day'" :limit-days="klines[tab].limit_days || []" :period="tab"
+                  :initial-bars="tab === 'day' ? 120 : 80" :main-height="store.isPhone ? 220 : 300" :sub-height="store.isPhone ? 78 : 96"/>
                 <qw-empty v-else-if="klineErr[tab]" compact icon="alert" title="K线数据暂时拿不到" :desc="klineErr[tab]" action-text="重试" @action="loadKline(tab)"/>
                 <qw-empty v-else-if="klines[tab]" compact icon="candle" title="没有K线数据"/>
                 <qw-skeleton v-else :height="chartH"/>
@@ -437,6 +504,18 @@
               desc="模型只评估三类股票：今天涨了5%以上但没封涨停的强势股（强势股波段）、今天涨停的（看明天能不能连板），以及最近5天没涨停、有机会首次涨停的。这只股票今天不在候选里。">
               <a class="btn sm" href="#/predict">去看预测名单</a>
             </qw-empty>
+          </qw-card>
+
+          <qw-card v-if="dayChips" class="o3" title="筹码分布" icon="layers" :help="CHIPS_HELP" :sub="'截至 ' + dayChips.as_of">
+            <div class="chip-stats">
+              <div><span class="muted">获利比例</span><b class="num">{{ isNum(dayChips.last.winner) ? Math.round(dayChips.last.winner * 100) + '%' : '—' }}</b></div>
+              <div><span class="muted">平均成本</span><b class="num">{{ $fmt.price(dayChips.last.avg_cost) }}</b></div>
+              <div><span class="muted">90%筹码区间</span><b class="num">{{ $fmt.price(dayChips.last.p5) }}–{{ $fmt.price(dayChips.last.p95) }}</b></div>
+              <div><span class="muted">集中度</span><b class="num">{{ isNum(dayChips.last.conc90) ? (dayChips.last.conc90 * 100).toFixed(1) + '%' : '—' }}</b></div>
+            </div>
+            <qw-chips :chips="dayChips" :price="isNum(q.price) ? q.price : null" height="280px"/>
+            <ul class="chip-read"><li v-for="(t, i) in chipsText" :key="i">{{ t }}</li></ul>
+            <div class="muted" style="font-size:12px">红色 = 成本低于现价（获利盘），蓝色 = 成本高于现价（套牢盘）。{{ dayChips.note }}</div>
           </qw-card>
 
           <qw-card v-if="book" class="o4" title="买卖五档" icon="bars" help="挂单情况：卖1~卖5是最便宜的5档卖单，买1~买5是出价最高的5档买单，数量单位是手（100股）。">

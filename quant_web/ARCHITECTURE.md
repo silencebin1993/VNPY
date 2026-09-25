@@ -382,3 +382,168 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
 - `#/model`：swing 卡片主数字=按你的本金回测（另列模型检验、天天随便挑），选择期/留出期表分"按你的本金回测"与"模型检验"两组（含同日同数量列）；`#/data`：三个模型的状态与训练选项；`#/watch`：swing 候选显示"AI波段评估"（预期收益、今天候选平均）。
 - `#/settings` 检验结果：对比表另有"同日同数量随便挑 / 只比挑股票多赚"（门槛起作用时）；`tuned.modified` 时显示"你改过推荐设置"横幅（含本机检验过几套），t 值不再标绿。
 - `#/etf?tab=backtest`：标签"历史回测（样本内）"，顶部横幅说明参数是用同一段历史选的、成绩偏乐观（`in_sample_note`）。
+
+## 8. 第三版：投资助手（2026-09-24 起，按阶段实现；计划见 `C:\Users\wb143\.claude\plans\akshare-enchanted-starfish.md`）
+
+### 8.0 定位与硬规则（在第 6、7 节之上追加，全部必须遵守）
+- 目标：给新手用的全功能投资助手。包括：指标/公式/量价主力分析/排雷/大盘仓位 → 选股器 → 模拟盘与实盘（接口可切换）→ 纪律风控 → 模型实验室 → 策略中心。
+- 用户默认值（2026-09-24 用户回答，`settings.profile`/`live`）：
+  - 只有沪深主板权限（`boards=["main"]`）；
+  - 只能晚上看盘，做波段（`horizon="swing"`、`watch_time="evening"`）；
+  - 单笔最多亏总资金 1%；
+  - 实盘只允许止损自动卖出，买入必须人工确认（`auto_policy="stop_only"`）。
+- 诚实：公式/选股方案/策略/实验室/主力阶段展示的所有胜率收益，一律满足以下要求。
+  - 样本外（沿用 `backtest.HOLDOUT_START`）、扣成本；
+  - 旁边放同日随机基准和指数；
+  - t 值取 min(daily_t, nw_t)，小于 2 标"还不够可信"；
+  - 附样本数；
+  - 必须复用 `execution.simulate` / `stats.py` / `model.purge_mask`，不另写统计。
+
+  只能实时取到的数据（如新浪资金流，只有约 20 天）不参与任何历史统计，页面标"仅实时参考"。
+- 禁止未来函数：公式里出现 ZIG/PEAK/TROUGH/BACKSET/REFX/XMA 直接报错。
+- 开发期间不训练模型、不做全量下载；训练和全量更新只由用户在页面上点按钮触发。
+- 只新增不改动：第 0–7 节的接口和字段保持不变。`paper.py` 页面名改为"策略跟踪"，接口不变。
+
+### 8.1 设置新增分组（settings.py；全部 `extra="ignore"`）
+- `profile`：`capital`、`boards`（默认 ["main"]）、`horizon`（short/swing/long）、`risk_per_trade`（默认 0.01）、`watch_time`（evening/sometimes/fulltime）、`onboarded`。
+- `providers`：`chains`（能力 → 数据源顺序；空 = 默认）、`tushare_token`、`qmt_path`。
+- `risk`：`max_single_pct` 0.2、`regime_caps` {strong .8, neutral .5, weak .2}、`daily_loss_limit` .03、`cooldown_losses` 3、`cooldown_days` 2、`chase_warn_pct` 5、`require_stop`、`default_stop_pct` .08、`block_distribution`、`block_risk_red`、`warn_average_down`、`min_amount_20d` 5e7。
+- `live`：`enabled`=False、`broker`（manual/qmt/easytrader/vnpy_gateway）、`auto_policy`（none/stop_only/full，默认 stop_only）、`max_order_amount`、`qmt_path`、`qmt_account`、`easytrader_client`、`vnpy_gateway`、`vnpy_setting`。
+- `notify`：`channels`（web/pushplus/serverchan/email）、token 与邮箱、`min_level`、免打扰 `quiet_start/quiet_end`（"HH:MM"）。
+- `monitor`：`enabled`、`interval_sec` 30、`watch_watchlist`、`move_alert_pct` 3。
+- `assistant`：`enabled`、`screeners`（每天自动跑的选股方案）、`fund_flow_limit` 300。
+- `settings.PARTS` 登记全部分组。`load()` 某部分损坏时只恢复那一部分（**新增分组必须登记进 PARTS**）。
+
+### 8.2 通用数据接口 `quant_web/providers/`
+- `base.py`：
+  - `CAPABILITIES`（能力 → 中文名 + 白话说明）、`SCHEMAS`（各能力的统一列名、类型、单位：元/股/百分数）；`conform(df, cap)` 把表整理成统一格式（空表 → 统一格式的空表）。
+  - `DataProvider`（name/label/description/capabilities/optional/available()/fetch_<能力>(**kw)；参数不支持时抛 `Unavailable`）。
+  - `ProviderRegistry`：
+    - `fetch(cap, *, chain=None, empty_ok=False, **kw)` 返回 `FetchResult(data, source, tried)`。按链逐个尝试；全部失败抛 `ProviderError`（中文，列出每个源的原因）；全部返回空时给空结果，不报错。
+    - 其余方法：`chain(cap)`（用户顺序优先，否则 `DEFAULT_CHAINS`）、`status()`、`probe(cap, name)`（`sample_kwargs` 的小参数试取，不写文件）。
+  - `registry()` 是全局单例，首次调用时由 `builtin.register_all()` 注册内置源：local（本机数据，优先）、tencent、sina、exchange（沪深交易所两融）、em_datacenter（只走 datacenter-web）、baostock、akshare、builtin_news，另有可选的 tushare、qmt。
+- `store.py`：扩展数据存档 `stock_lab/ext/{name}.parquet`（`ARCHIVES` 登记每个存档的去重主键和日期列）。`save(name, df, replace_where=None)` 合并去重后原子写入；`load(name)`；`info()`。
+- `updates.py`：`update_all(progress, flow_codes)` 等更新函数，出错只写进结果、不抛异常。
+- 现有 `market/*` 模块不改。日线面板仍由 `history.update_history` 维护（腾讯 + 多重校验）；注册表的 local 源从面板读数据。
+
+### 8.3 后台任务白名单 `quant_web/tasks.py`
+- `@task(name, title, group, description)` 登记任务；`submit(name, params)` 通过 `JOBS.submit(job_name(name, params), ...)` 启动（同名同参数正在运行时返回原 id）。
+- 任务组：HEAVY 与原来的更新/训练共用一把锁，EXT 用于扩展数据下载。
+- 已登记：`ext_update`（providers.updates.update_all）。
+
+### 8.4 新接口（`api/routes/*.py` 的 APIRouter，`routes.register(app)` 在旧路由之后、静态兜底路由之前挂载；公共工具在 `api/common.py`，server.py 重新导出旧名字）
+| 方法 路径 | 说明 |
+|---|---|
+| GET `/api/tasks` | 白名单任务清单 |
+| POST `/api/jobs/run` `{name, params}` | 启动白名单任务 → `{job_id}`（未登记 → 400） |
+| GET `/api/providers` | `{capabilities: registry.status(), providers: [...], archives: store.info()}` |
+| PUT `/api/providers/chain` `{capability, chain}` | 保存数据源顺序（空 = 恢复默认；不支持该能力的源 → 400） |
+| POST `/api/providers/probe` `{capability, provider}` | 测试连接 → `{ok, ms, rows, error, params, sample}` |
+| GET `/api/providers/archive/{name}?code=&limit=` | 预览扩展数据存档 |
+
+### 8.5 前端
+- 导航分组：`NAV_GROUPS`（行情/选股/策略/交易/更多），每个 route 带 `group`。电脑侧栏显示组标题；手机"更多"按组排列。页面改名："短线预测"→"短线观察"，"模拟盘"→"策略跟踪"。
+- 新文件：
+  - `v3.css`：第三版样式，只新增。
+  - `glossary.js`：`QW.GLOSSARY` 名词解释、`QW.term(k)`、`<qw-term k>`。
+  - `pages/guide.js`：新手指南，包括首次向导（写 `settings.profile`，`onboarded=true`）、每天怎么用、名词解释、重要提醒。
+  - `pages/sources.js`：数据源页面。
+- 共享组件放在单独文件里，通过 `QW.extraComponents.push([name, comp])` 注册（`boot()` 会统一注册）。
+- 外壳：启动时读 `/api/settings`，`store.needOnboard` 为真时在页面顶部显示新手向导提醒条（"以后再说"只在本次浏览器会话内隐藏）。
+
+### 8.6 指标库 `quant_web/indicators/`（P2）
+- `funcs.py`：通达信口径的基础函数，Series 进、Series 出。
+  - 表可含多只股票，必须按 (code, date) 排序；`Ctx(codes)` 记录分组（gid）和组内序号（pos）。
+  - 窗口函数整列计算后，把跨到上一只股票的行改为组内累计值或空值；递推函数用 `.over`。
+  - 口径：
+    - MA、STD 不足 N 天为空；STD 用样本标准差；
+    - EMA、SMA 首日等于 X；
+    - HHV、LLV、SUM、COUNT、EXIST 不足 N 天时用已有天数，N=0 表示累计；EVERY 不足 N 天为假；
+    - REF 取不到时为空；CROSS 为今天 A>B 且昨天 A<=B；BARSLAST 从未成立为空；
+    - FILTER 只依赖过去；SAR 为 Wilder 算法（0.02/0.02/0.2）。
+  - 其他函数：SLOPE、WMA、AVEDEV、DMA、max_/min_/if_/safe_div（除数为 0 时结果为空）。
+- `ta.py`：`COMPUTE[id](d, ctx, **params) -> [(key, label, Series, style)]`。
+  - style 取值：line、dash、dot、bar、vol、macd。
+  - 共 25 个指标：ma、expma、boll、ene、sar、vol、macd、kdj（区间为 0 时 RSV=50）、rsi（第一天涨跌按 0）、wr（通达信口径）、cci、dmi（SUM 口径）、bias、obv、mfi、vr、atr、trix、dma、psy、brar、cr、turnover、volratio、updown（阳量阴量比）。
+- `catalog.py`：
+  - `CATALOG[id]` 包含 name、cat、pane（main/sub）、params `(键, 中文名, 默认, 最小, 最大)`、refs、explain、usage、trap。
+  - `listing()`；`clean_params()` 超出范围抛 ValueError（中文）。
+  - `compute(bars, ids, params)` 返回 `{id: {name, pane, refs, params, lines: [{key, label, style, data}], error?}}`；缺列只影响该指标。
+- `adjust.py`：
+  - `add_qfq(df, by="code"|None)` 增加 qopen/qhigh/qlow/qclose 与 adj_factor（qclose/close）。前复权以最新收盘为锚，截取一段计算结果不变。
+  - `adjust_price(price, factor_then, factor_now) = price × factor_then / factor_now`，用于除权后调整止损价和目标价。
+- `chips.py`（筹码分布估算）：
+  - 全市场共用对数价格网格（1% 一格，0.01～10 万元，`N_BINS`）。
+  - 每天按换手率 r 衰减旧筹码，新增 r 份按 [low, high] 三角分布（峰值为均价 amount/volume）。
+  - 除权日按 preclose/昨收 平移；第一天全量初始化；停牌不变。
+  - `ChipEngine.step/stats/distribution/save/load`。
+  - `compute_panel(panel, want=None, engine=None)` 输出 date、code、winner（WINNER(C)）、avg_cost、p5/p15/p50/p85/p95、conc70/conc90、peak。价格为当天真实价口径，可增量更新。
+  - `single(bars, code)` 返回 `{series, dist, last}`。
+  - 实测：全市场 1 年 4.5 秒；逐日统计约 0.1 秒/天。
+
+### 8.7 图表接口与组件（P2）
+- GET `/api/indicators/catalog` → `{items: listing(), cats}`。
+- GET `/api/stock/{code}/chart?period=day|week|month&count=&ind=ma,vol,macd&params={json}&chips=true`：
+  - 返回 `{code, name, period, adjust:"qfq", source:"realtime"|"panel", bars, indicators, chips, limit_days, warnings}`。
+  - bars：优先在线前复权 K 线；失败时用本地日线经 add_qfq 算出的前复权（周/月聚合）。
+  - chips：仅日线，默认用本地日线原始价计算（与全市场口径一致），价格类统计乘 adj_factor 后按日期对齐到 bars；本地没有时用 bars 估算。
+  - 结构 `{series, dist, last, as_of, source, note}`。
+  - 旧的 `/api/stock/{code}/kline` 保持不变。
+- `static/components.js`：
+  - `<qw-kline-pro :bars :indicators :main :subs :chips :show-cost :limit-days :markers :period>`：主图叠加指标、多个副图共用缩放和十字光标；refs 画虚线；markers 标注信号。
+  - `<qw-chips :chips :price>`：custom 系列画横向柱，获利盘红、套牢盘蓝；纵轴取累计 1%～99% 区间。
+  - `<qw-ind-picker v-model:main v-model:subs :catalog>`：最多 4 个副图。
+- 看盘页（watch.js）：
+  - 日/周/月 K 改用 `/chart`。
+  - 指标选择记在 localStorage（`qw-ind-main` / `qw-ind-subs`）。
+  - 可选平均成本线；右栏"筹码分布"卡片带白话解读。
+
+### 8.8 数据源适配器实测（2026-09-24，providers 子模块）
+- 内置源共 11 个：local_src、tencent_src、sina_src、exchange_src、em_datacenter_src、baostock_src、akshare_src、news_src，以及可选的 tushare_src、qmt_src（这两个没有安装，只用假模块测过）。`builtin.register_all` 注册全部源，某个源出错不影响其他源。
+- `updates.py`：`update_all(progress, flow_codes)`，外加 `update_margin/holder_count/unlock/pledge/forecast/holder_trades/index_bars/index_members/fund_flow`。出错只写进结果、不抛异常。`DEFAULT_INDICES`：上证、深成、创业板、沪深300、中证500、中证1000。
+- 单位与口径（适配器已换算成 SCHEMAS 口径）：
+  - 质押股数 ×1 万（原为万股，已用市值 / 股数核对）；增减持股数 ×1 万；akshare 日线换手 ×100；解禁 float_ratio ×100（原为小数，**只按数量级推断，未交叉核对**）。
+  - tushare 的 vol ×100（手 → 股）、amount ×1000（千元 → 元），只按文档换算。
+  - 腾讯 mkline 分钟线的成交量按"股"口径；5/15/30/60 分钟线没有成交额。
+- 已知缺口：
+  - 业绩预告 change_low 与 change_high 相同（akshare 只给一个值）。
+  - 上交所两融没有 rzrqye，深交所没有 rzche。
+  - 解禁 shares 取"解禁数量"（不是"实际解禁数量"）。
+  - 腾讯 1 分钟线只有最新价（开高低收相同）。
+
+### 8.9 公式系统 `quant_web/formula/`（P3）
+- `parser.py`：`compile_formula(text) -> Program(statements, outputs, condition, uses_chips, indicators, lookback)`。
+  - 通达信子集：`:=` 定义中间变量，`NAME:` 为输出线，`XG:` 为选股条件（没有 XG 时用最后一句）。支持注释 `{}`、`//`，行尾画线属性会被忽略；AND/OR/NOT、&&/||、= 与 <> 按通达信含义处理；支持大小写不敏感和中文变量名。
+  - 安全：先把文本转成 Python 表达式，只用 `ast.parse` 解析，逐个节点按白名单检查。只允许数字、数据字段（O/H/L/C/V（手）/AMOUNT/TURN/CAPITAL）、已定义变量、`FUNCS` 白名单函数，以及 `INDICATOR_REFS` 里的 `指标.线`。长度、语句数、节点数、深度都有上限。窗口参数必须是常数。
+  - `FUTURE_FUNCS`（ZIG/PEAK/TROUGH/BACKSET/REFX/XMA 等）一律拒绝，并用白话解释。`reference()` 返回给页面看的写法说明。
+- `engine.py`：
+  - `Evaluator(frame, chips).run(prog) -> FormulaResult(outputs, condition)`。条件为布尔序列，空值当作不成立；BETWEEN/RANGE/IF/REF（变量 N）等函数都在 indicators.funcs 里。
+  - `WINNER(C)` 与 `COST(Q)` 用筹码统计：COST 按 5/15/50/85/95 分位线性插值，并用 adj_factor 换算成前复权价。
+  - `prepare_frame(panel)` 把原始日线转成前复权，去掉停牌日，保留 raw_close/raw_open。
+  - 其他辅助：`load_frame`、`chips_for_frame(frame, raw_panel)`、`lookback_start(prog, end)`。
+- `library.py`：`LIBRARY` 共 25 个内置公式，分组 `GROUPS`：趋势、突破、量价主力、低吸反转、风险预警、筹码。每个公式带 kind（select/warn）、explain、usage、trap。
+- `validate.py`（事件研究，口径与回测一致）：
+  - 买卖规则：次日开盘买，开盘即涨停视为买不进；持有 N 个交易日后收盘卖，跌停封死则顺延，最多 5 天；超过 10 天的长期停牌视为买不进。
+  - 收益：按前复权计算，再乘 `(1-滑点)(1-佣金-印花税(卖出日))/((1+滑点)(1+佣金))`。
+  - 去重：同一只股票在持有期内重复出现的信号只算一次（FILTER）。
+  - 范围：默认只看主板；排除 ST；要求上市满 60 天；可设成交额门槛。
+  - 基准："同日同范围所有能买进股票的平均"；超额 = 信号收益 − 基准。
+  - 统计：按 HOLDOUT_START 分成选择期和留出期；t = min(daily_t, nw_t(lag=N))，按信号日汇总；`_verdict` 以留出期为准给出一句话结论。
+  - 输出：`{holds: {N: {signals, unfilled, pending, all/selection/holdout: {n, mean, median, win, base, excess, excess_win, t, ...}, years, verdict}}, recent, raw_signals, params, formula, data_start/end}`。
+  - `run(text, ...)` 读全部日线：全历史 890 万行约 7 秒，内存约 6 GB。
+  - 实测结论：经典的"5/20 金叉 + 放量 + 60 日线上"在样本内外都显著跑输同日随机（t 为 −4～−8）。
+- `store.py`：
+  - `workspace/formula/mine.json`（我的公式，保存前先做语法检查）。
+  - `workspace/formula/results/{key}.json`，key = sha1(规范化后的公式文本 + 参数)。
+- 后台任务：`tasks.formula_validate`（HEAVY 组），参数经 `tasks.formula_params` 整理（holds/boards/exclude_st/min_amount）。`job_name` 在参数过长时改用哈希。
+- 接口：
+  - GET `/api/formula/library`：内置公式和我的公式，附编译信息、已有验证结论、写法说明。
+  - POST `/api/formula/check {text}`：返回 `{ok, outputs, condition, uses_chips, lookback}`，出错时返回 `{ok:false, error}`。
+  - POST `/api/formula/preview {code, text|fid}`：返回 `{dates, series:{输出名:[...]}, signals, outputs(名称列表), ...}`。
+  - POST `/api/formula/scan {text|fid, boards?, exclude_st}`：扫描最近一个交易日。默认板块取 `profile.boards`，最多返回 500 行。用到筹码时只算最近 30 天的统计。
+  - POST `/api/formula/validate {text|fid, holds?, boards?, min_amount?, force?}`：有缓存时返回 `{key, result}`，否则返回 `{key, job_id}`。
+  - GET `/api/formula/result/{key}`；GET/POST `/api/formula/mine`、DELETE `/api/formula/mine/{id}`。
+- 前端 `pages/formula.js`（路由 `#/formula`，分组"选股"）：
+  - 左侧为公式列表（分组筛选、验证徽章）；右侧为说明、公式文本和操作按钮：今天选股、历史验证、复制成我的公式、写法说明抽屉。
+  - 验证结果按持有天数分表显示选择期/留出期/全部，并附逐年超额柱图；试过的公式数达到 5 个时提醒注意过拟合（localStorage `qw-formula-tried`）。
+  - 在个股上看信号：`qw-kline-pro` 用 markers 标出信号日；输出线按数值量级自动放到主图或副图。

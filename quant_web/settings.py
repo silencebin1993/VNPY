@@ -97,6 +97,141 @@ class TradeSettings(BaseModel):
     slippage: float = Field(0.001, ge=0, le=0.05)           # 滑点（双边）
 
 
+# ---------------------------------------------------------------- 第三版（投资助手）新增的设置分组
+# 默认值来自用户 2026-09-24 的回答：只有沪深主板权限、只能晚上看盘（做波段）、单笔最多亏总资金 1%、
+# 实盘止损可以自动卖但买入要确认。所有分组都只新增，不改动上面的 predict/trade。
+
+def _check_board_list(value: list[str]) -> list[str]:
+    unknown: list[str] = [b for b in value if b not in BOARDS]
+    if unknown:
+        raise ValueError(f"不认识的板块：{'、'.join(unknown)}（可选 main/chinext/star/bj）")
+    if not value:
+        raise ValueError("至少要选一个板块")
+    return [b for b in BOARDS if b in value]
+
+
+class ProfileSettings(BaseModel):
+    """我的情况（首次使用向导填写）：决定选股范围、仓位大小和提醒方式的默认值"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    capital: float = Field(100_000, ge=1_000, le=1e10)      # 准备用来炒股的资金（元）
+    boards: list[str] = Field(default_factory=lambda: ["main"])     # 账户能交易的板块
+    horizon: Literal["short", "swing", "long"] = "swing"    # 短线1-3天 / 波段几天到几周 / 中长线几个月
+    risk_per_trade: float = Field(0.01, ge=0.002, le=0.05)  # 单笔最多亏总资金的比例（0.01 = 1%）
+    watch_time: Literal["evening", "sometimes", "fulltime"] = "evening"     # 只能晚上看 / 白天偶尔看 / 全天盯盘
+    onboarded: bool = False             # 是否已完成首次使用向导
+
+    @field_validator("boards")
+    @classmethod
+    def _check_boards(cls, value: list[str]) -> list[str]:
+        return _check_board_list(value)
+
+
+class ProviderSettings(BaseModel):
+    """数据源：每种数据按顺序尝试，前一个失败自动换下一个（空 = 用内置默认顺序）"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    chains: dict[str, list[str]] = Field(default_factory=dict)     # 数据能力 → 数据源名称顺序
+    tushare_token: str = ""             # tushare pro 的 token（可选）
+    qmt_path: str = ""                  # 券商 QMT 安装目录（可选，用 xtdata 取数据时需要）
+
+
+class RiskSettings(BaseModel):
+    """纪律与风控：每笔下单前都检查一遍（模拟盘和实盘一样）"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    max_single_pct: float = Field(0.20, gt=0, le=1)         # 单只股票最多占总资金的比例
+    regime_caps: dict[str, float] = Field(default_factory=lambda: {"strong": 0.8, "neutral": 0.5, "weak": 0.2})
+    daily_loss_limit: float = Field(0.03, ge=0, le=0.2)     # 当天亏损达到总资金的这个比例，当天禁止再买（0 = 不启用）
+    cooldown_losses: int = Field(3, ge=0, le=20)            # 连续亏几笔进入冷静期（0 = 不启用）
+    cooldown_days: int = Field(2, ge=0, le=30)              # 冷静期几个交易日不能买入
+    chase_warn_pct: float = Field(5.0, ge=0, le=30)         # 当天已经涨了这么多（%）还要买，需要二次确认
+    require_stop: bool = True                               # 买入必须设止损价
+    default_stop_pct: float = Field(0.08, ge=0.01, le=0.5)  # 找不到更合适的止损位时，默认买入价下方 8%
+    block_distribution: bool = True                         # 疑似主力出货/下跌阶段的股票禁止买入
+    block_risk_red: bool = True                             # 排雷红灯的股票禁止买入
+    warn_average_down: bool = True                          # 给亏损的股票补仓摊平时提醒
+    min_amount_20d: float = Field(5e7, ge=0, le=1e11)       # 20日平均成交额下限（元），太小的股票不好卖
+
+    @field_validator("regime_caps")
+    @classmethod
+    def _check_caps(cls, value: dict[str, float]) -> dict[str, float]:
+        out: dict[str, float] = {"strong": 0.8, "neutral": 0.5, "weak": 0.2}
+        for k, v in value.items():
+            if k not in out:
+                raise ValueError(f"不认识的大盘环境「{k}」（可选 strong/neutral/weak）")
+            if not 0 <= float(v) <= 1:
+                raise ValueError("大盘环境对应的总仓位上限要在 0 到 1 之间")
+            out[k] = float(v)
+        return out
+
+
+class LiveSettings(BaseModel):
+    """实盘（真钱）：总开关默认关；自动下单只限止损卖出（auto_policy=stop_only），买入必须人工确认"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    broker: Literal["manual", "qmt", "easytrader", "vnpy_gateway"] = "manual"
+    auto_policy: Literal["none", "stop_only", "full"] = "stop_only"
+    max_order_amount: float = Field(50_000, ge=0, le=1e10)  # 单笔最大金额（元），0 = 不限
+    qmt_path: str = ""                  # miniQMT 的 userdata_mini 目录
+    qmt_account: str = ""               # 资金账号
+    easytrader_client: str = ""         # 同花顺下单程序 xiadan.exe 的路径
+    vnpy_gateway: str = ""              # 例如 vnpy_xtp.XtpGateway
+    vnpy_setting: dict[str, Any] = Field(default_factory=dict)
+
+
+class NotifySettings(BaseModel):
+    """提醒推送：网页站内信一直有；微信/邮件需要填写对应的 token 或邮箱"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    channels: list[Literal["web", "pushplus", "serverchan", "email"]] = Field(default_factory=lambda: ["web"])
+    pushplus_token: str = ""
+    serverchan_key: str = ""
+    email_host: str = ""
+    email_port: int = Field(465, ge=1, le=65535)
+    email_user: str = ""
+    email_password: str = ""
+    email_to: str = ""
+    min_level: Literal["info", "warn", "urgent"] = "warn"   # 这个级别及以上才推送到微信/邮件
+    quiet_start: str = "22:30"          # 免打扰时段（紧急提醒不受限制）
+    quiet_end: str = "07:30"
+
+    @field_validator("quiet_start", "quiet_end")
+    @classmethod
+    def _check_hhmm(cls, value: str) -> str:
+        parts: list[str] = str(value).strip().split(":")
+        if len(parts) != 2 or not all(p.isdigit() for p in parts) or not (0 <= int(parts[0]) < 24 and 0 <= int(parts[1]) < 60):
+            raise ValueError("时间格式应为 时:分，例如 22:30")
+        return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+
+
+class MonitorSettings(BaseModel):
+    """盘中监控（程序开着时，交易时段定时检查持仓、挂单和交易计划）"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    interval_sec: int = Field(30, ge=10, le=600)
+    watch_watchlist: bool = True        # 自选股也做异动提醒
+    move_alert_pct: float = Field(3.0, ge=0.5, le=20)       # 5 分钟内涨跌超过这么多（%）提醒
+
+
+class AssistantSettings(BaseModel):
+    """每日收盘流水线里"投资助手"部分的开关和规模"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    screeners: list[str] = Field(default_factory=list)      # 每天收盘后自动运行的选股方案
+    fund_flow_limit: int = Field(300, ge=0, le=3000)        # 每天最多拉多少只股票的资金流（持仓+自选+候选）
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -104,6 +239,22 @@ class Settings(BaseModel):
     trade: TradeSettings = Field(default_factory=TradeSettings)
     auto_update: bool = True            # 交易日收盘后自动更新数据并预测
     risk_ack: bool = False              # 用户是否已阅读短线风险提示
+    # 第三版新增
+    profile: ProfileSettings = Field(default_factory=ProfileSettings)
+    providers: ProviderSettings = Field(default_factory=ProviderSettings)
+    risk: RiskSettings = Field(default_factory=RiskSettings)
+    live: LiveSettings = Field(default_factory=LiveSettings)
+    notify: NotifySettings = Field(default_factory=NotifySettings)
+    monitor: MonitorSettings = Field(default_factory=MonitorSettings)
+    assistant: AssistantSettings = Field(default_factory=AssistantSettings)
+
+
+# load() 里某一部分损坏时逐部分恢复用（新增分组必须登记在这里，否则别处出错时会被悄悄重置成默认值）
+PARTS: dict[str, type[BaseModel]] = {
+    "predict": PredictSettings, "trade": TradeSettings, "profile": ProfileSettings, "providers": ProviderSettings,
+    "risk": RiskSettings, "live": LiveSettings, "notify": NotifySettings, "monitor": MonitorSettings,
+    "assistant": AssistantSettings,
+}
 
 
 GROUP_LABELS: dict[str, str] = {
@@ -120,6 +271,22 @@ FIELD_LABELS: dict[str, str] = {
     "max_gap_pct": "开盘涨幅上限(%)", "exit_rule": "卖出规则", "stop_loss_pct": "止损比例",
     "fee_rate": "佣金费率", "stamp_duty": "印花税", "stamp_by_date": "印花税按日期", "slippage": "滑点",
     "auto_update": "自动更新", "risk_ack": "风险提示确认",
+    # 第三版新增
+    "profile": "我的情况", "providers": "数据源", "risk": "纪律风控", "live": "实盘", "notify": "提醒推送",
+    "monitor": "盘中监控", "assistant": "投资助手",
+    "horizon": "操作周期", "risk_per_trade": "单笔最多亏", "watch_time": "看盘时间", "onboarded": "已完成向导",
+    "chains": "数据源顺序", "tushare_token": "tushare token", "qmt_path": "QMT 目录",
+    "max_single_pct": "单只最多占比", "regime_caps": "大盘环境仓位上限", "daily_loss_limit": "单日亏损上限",
+    "cooldown_losses": "连亏几笔冷静", "cooldown_days": "冷静期天数", "chase_warn_pct": "追高提醒涨幅(%)",
+    "require_stop": "必须设止损", "default_stop_pct": "默认止损比例", "block_distribution": "禁买出货阶段",
+    "block_risk_red": "禁买排雷红灯", "warn_average_down": "摊平补仓提醒", "min_amount_20d": "20日均成交额下限",
+    "enabled": "开关", "broker": "券商接口", "auto_policy": "自动下单范围", "max_order_amount": "单笔最大金额",
+    "qmt_account": "资金账号", "easytrader_client": "同花顺下单程序", "vnpy_gateway": "vnpy 网关",
+    "vnpy_setting": "vnpy 网关参数", "channels": "推送渠道", "pushplus_token": "PushPlus token",
+    "serverchan_key": "Server酱 key", "email_host": "邮件服务器", "email_port": "邮件端口", "email_user": "邮箱账号",
+    "email_password": "邮箱授权码", "email_to": "收件邮箱", "min_level": "推送级别", "quiet_start": "免打扰开始",
+    "quiet_end": "免打扰结束", "interval_sec": "检查间隔(秒)", "watch_watchlist": "自选股异动提醒",
+    "move_alert_pct": "异动幅度(%)", "screeners": "每天自动选股方案", "fund_flow_limit": "资金流每天最多几只",
 }
 
 
@@ -371,9 +538,9 @@ def load() -> Settings:
     try:
         return Settings.model_validate(raw)
     except ValidationError:
+        parts: dict[str, Any] = {name: _load_part(model, raw.get(name)) for name, model in PARTS.items()}
         return Settings(
-            predict=_load_part(PredictSettings, raw.get("predict")),       # type: ignore[arg-type]
-            trade=_load_part(TradeSettings, raw.get("trade")),             # type: ignore[arg-type]
+            **parts,
             auto_update=raw.get("auto_update") if isinstance(raw.get("auto_update"), bool) else True,
             risk_ack=raw.get("risk_ack") if isinstance(raw.get("risk_ack"), bool) else False,
         )
