@@ -100,6 +100,11 @@ select = [
 ]
 ignore = ["E501"]
 
+[tool.pytest.ini_options]
+markers = [
+    "network: live-network smoke tests (auto-skipped when offline)",
+]
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true

@@ -41,3 +41,8 @@ _templates
 # Alpha
 lab/
 /.mypy_cache
+
+# ETF Quant
+.venv/
+etf_quant/workspace/
+quant_web/workspace/

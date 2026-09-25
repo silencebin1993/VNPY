@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>量化助手</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e5383b'/%3E%3Cpath d='M5 22l7-7 5 5 9-10' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script>
+    // 首屏前应用主题，避免闪白
+    (function () {
+      try {
+        var t = localStorage.getItem("qw-theme");
+        if (!t || t === "auto") t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", t);
+      } catch (e) { /* 忽略 */ }
+    })();
+    // 排查用：地址加 ?debug=1（如 http://127.0.0.1:8765/?debug=1#/predict）时，把脚本错误显示在页面底部
+    (function () {
+      if (!/[?&]debug=1/.test(location.search)) return;
+      var box = null;
+      function show(text) {
+        if (!box) {
+          box = document.createElement("pre");
+          box.id = "qw-debug-errors";
+          box.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;max-height:40vh;overflow:auto;margin:0;" +
+            "padding:6px 10px;background:#b00020;color:#fff;font:12px/1.4 monospace;white-space:pre-wrap";
+          (document.body || document.documentElement).appendChild(box);
+        }
+        box.textContent += text + "\n";
+      }
+      window.addEventListener("error", function (e) {
+        show("[error] " + e.message + " @ " + (e.filename || "").split("/").pop() + ":" + e.lineno);
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        show("[promise] " + (e.reason && (e.reason.stack || e.reason.message) || e.reason));
+      });
+      var orig = console.error;
+      console.error = function () {
+        try {
+          show("[console] " + Array.prototype.map.call(arguments, function (a) {
+            return a && a.stack ? a.stack.split("\n").slice(0, 3).join(" | ") : String(a);
+          }).join(" "));
+        } catch (err) { /* 忽略 */ }
+        return orig.apply(console, arguments);
+      };
+      var warn = console.warn;
+      console.warn = function () {
+        try { show("[warn] " + Array.prototype.map.call(arguments, String).join(" ").slice(0, 300)); } catch (err) { /* 忽略 */ }
+        return warn.apply(console, arguments);
+      };
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="app"><div class="qw-boot">正在加载量化助手…</div></div>
+  <noscript>请开启浏览器的 JavaScript 功能后再使用量化助手。</noscript>
+
+  <script src="/static/vendor/vue.global.prod.js"></script>
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script src="/static/app.js"></script>
+  <!-- 页面组件：每个文件调用 QW.page(name, component) 注册；缺失的页面显示"建设中" -->
+  <script src="/static/pages/dashboard.js"></script>
+  <script src="/static/pages/watch.js"></script>
+  <script src="/static/pages/predict.js"></script>
+  <script src="/static/pages/paper.js"></script>
+  <script src="/static/pages/watchlist.js"></script>
+  <script src="/static/pages/news.js"></script>
+  <script src="/static/pages/settings.js"></script>
+  <script src="/static/pages/model.js"></script>
+  <script src="/static/pages/etf.js"></script>
+  <script src="/static/pages/data.js"></script>
+</body>
+</html>
