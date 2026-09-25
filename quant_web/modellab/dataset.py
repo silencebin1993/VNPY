@@ -25,7 +25,7 @@ from . import options as O
 Progress = Callable[[float, str], None]
 MIN_LISTED: int = 60
 CHUNK_CODES: int = 400                  # 按股票分块算因子，每块多少只
-SCORING_LOOKBACK_DAYS: int = 560        # 只给最新一天打分时，往前取多少个日历日（年线、Alpha 回看期都够）
+FEATURE_LOOKBACK_DAYS: int = 600        # 算因子时往前多取多少个日历日（最长 250 个交易日的窗口 + 递推指标的预热；训练和打分一致）
 
 
 @dataclass
@@ -40,10 +40,34 @@ def _say(progress: Progress | None) -> Progress:
     return progress or (lambda f, m: None)
 
 
-def load_base(progress: Progress | None = None) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """全历史字段表（特征 + 主力阶段 + 交易列）和公式表（前复权），和选股器回测共用缓存"""
+TABLE_COLS: list[str] = ["code", "date", "board", "pos", "is_st", "amt20", "open", "close", "raw_open", "raw_close", "preclose",
+                          "limit_up", "limit_down", "float_cap", "stage"]
+
+
+def load_base(progress: Progress | None = None, boards: list[str] | None = None,
+              codes: list[str] | None = None) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """全历史字段表（特征 + 主力阶段 + 交易列）和公式表（前复权），和选股器回测共用缓存。
+    只读需要的股票和列（全市场全部读进来要 6GB 多内存）；缓存还没有时先整理一次（第一次约 1~3 分钟、内存峰值较高）"""
+    import gc
+
+    from ..formula import engine as fengine
     from ..screener import backtest as sbt
-    return sbt.load_or_build_history(use_chips=False, progress=progress)
+
+    if not _base_cached():
+        _ = sbt.load_or_build_history(use_chips=False, progress=progress)
+        del _
+        gc.collect()
+    path, _stamp = sbt._cache_paths(False)
+    want: list[str] = TABLE_COLS + F.MAINFORCE_COLS + [f"score_{s}" for s in F.STAGES]
+    have: list[str] = list(pl.read_parquet_schema(path).keys())
+    q = pl.scan_parquet(path).select([c for c in dict.fromkeys(want) if c in have])
+    if codes is not None:
+        q = q.filter(pl.col("code").is_in(codes))
+    elif boards:
+        q = q.filter(pl.col("board").is_in(boards))
+    table: pl.DataFrame = q.collect()
+    frame: pl.DataFrame = fengine.load_frame(codes=table["code"].unique().to_list()) if table.height else table.head(0)
+    return table, frame
 
 
 def _watchlist() -> list[str]:
@@ -144,7 +168,7 @@ def compute_features(cfg: dict, table: pl.DataFrame, frame: pl.DataFrame, keys: 
     out: pl.DataFrame = keys
     by_set: dict[str, list[str]] = {}
     codes: list[str] = keys["code"].unique(maintain_order=True).to_list()
-    frame = frame.filter(pl.col("code").is_in(codes))
+    frame = frame.filter(pl.col("code").is_in(codes) & (pl.col("date") >= keys["date"].min() - timedelta(days=FEATURE_LOOKBACK_DAYS)))
     n_steps: int = max(len(sets), 1)
     for i, s in enumerate(sets):
         src: str = F.FACTOR_SETS[s]["source"]
@@ -180,10 +204,10 @@ def build(cfg: dict, progress: Progress | None = None, *, base: tuple[pl.DataFra
     say = _say(progress)
     t0: float = time.time()
     say(0.0, "读取全历史数据（第一次约 3 分钟，之后几秒）……")
-    table, frame = base or load_base(lambda f, m: say(0.25 * f, m))
+    codes: list[str] | None = universe_codes(cfg)
+    table, frame = base or load_base(lambda f, m: say(0.25 * f, m), boards=O.UNIVERSES[cfg["universe"]]["boards"], codes=codes)
     if table.is_empty():
         raise ValueError("本地还没有日线数据，请先点“一键更新”下载数据")
-    codes: list[str] | None = universe_codes(cfg)
     if codes is not None:
         table = table.filter(pl.col("code").is_in(codes))
     else:
@@ -207,8 +231,7 @@ def build(cfg: dict, progress: Progress | None = None, *, base: tuple[pl.DataFra
         rows = add_targets(rows, cfg)
     say(0.3, f"范围内 {rows['code'].n_unique()} 只股票、{rows['date'].n_unique()} 个交易日、{rows.height:,} 行")
     if scoring_only:
-        frame = frame.filter(pl.col("date") >= last - timedelta(days=SCORING_LOOKBACK_DAYS))
-        table = table.filter(pl.col("date") >= last - timedelta(days=SCORING_LOOKBACK_DAYS))
+        table = table.filter(pl.col("date") >= last - timedelta(days=FEATURE_LOOKBACK_DAYS))
     feats_df, by_set = compute_features(cfg, table, frame, rows.select("code", "date"),
                                         progress=lambda f, m: say(0.3 + 0.6 * f, m))
     features: list[str] = [f for s in cfg["factor_sets"] for f in by_set.get(s, [])]
@@ -286,20 +309,25 @@ def estimate(cfg: dict) -> dict:
     years: float = max(0.25, end_year - cfg["start_year"])
     rows: int = int(n_stocks * 243 * years * 0.8)                       # 0.8：上市不满 60 天、ST、成交额太小、停牌
     n_feat: int = F.count_of(cfg["factor_sets"])
-    total_rows: int = int(max(bc["total"], n_stocks) * 243 * 7.5)       # 全历史字段表（全部股票，2019 年至今）
-    base_gb: float = total_rows * 70 * 5 / 1e9                          # 字段表 + 公式表
-    feat_gb: float = rows * n_feat * 4 * 2.5 / 1e9                      # 因子表 + 训练矩阵 + 模型内部（分箱）
+    # 内存按真实数据实测标定（2026-09-25）：全历史（2019 年至今）每百万行，只读范围内的股票和列约 0.45GB；
+    # 第一次整理全历史字段表时峰值约 1.6GB / 百万行（全市场）；因子表 × 4（计算时的临时副本 + 训练矩阵 + 模型分箱，偏保守）
+    total_m: float = max(bc["total"], n_stocks) * 243 * 7.5 / 1e6
+    base_gb: float = 0.45 * n_stocks * 243 * 7.5 / 1e6 + 0.3
+    feat_gb: float = rows * n_feat * 4 * 4.0 / 1e9
     alpha_gb: float = (CHUNK_CODES * 243 * 7.5 * 158 * 8 * 3 / 1e9) if "alpha158" in cfg["factor_sets"] else 0.0
     if "alpha101" in cfg["factor_sets"]:
         alpha_gb = max(alpha_gb, n_stocks * 380 * 80 * 8 * 3 / 1e9)
-    mem_gb: float = round(base_gb + feat_gb + alpha_gb, 1)
+    build_gb: float = 0.0 if _base_cached() else 1.6 * total_m
+    mem_gb: float = round(max(build_gb, base_gb + feat_gb + alpha_gb), 1)
     spec = models.get(cfg["model"])
     preset: dict = O.PRESETS[cfg["preset"]]
     n_folds: int = max(1, int(math.ceil((years - 2) * 12 / preset["step_months"])))
     train_rows: float = min(rows * 0.6, spec.max_rows(cfg["preset"]) or rows)
     # 本机实测（2026-09-25）：LightGBM 100 万行 × 100 个因子，每轮约 0.0275 秒；其他模型按相对速度折算
     fit_min: float = (n_folds + 1) * (train_rows / 1e6) * (n_feat / 100) * ROUNDS_TYPICAL[cfg["preset"]] * 0.0275 / 60 * spec.speed
-    feat_min: float = rows / 0.8 / 1e6 * F.minutes_per_million(cfg["factor_sets"])
+    since_2019: float = max(0.25, date.today().year + date.today().timetuple().tm_yday / 366 - 2019)
+    frame_m: float = n_stocks * 243 * min(years + FEATURE_LOOKBACK_DAYS / 365, since_2019) / 1e6      # 含回看期的行数
+    feat_min: float = frame_m * F.minutes_per_million(cfg["factor_sets"])
     base_min: float = 0.5 if _base_cached() else 3.0
     minutes: float = round(max(1.0, base_min + fit_min + feat_min), 0)
     cap: float = float(settings_mod.load().lab.max_mem_gb)
