@@ -252,3 +252,35 @@ textarea.fm-code { resize: vertical; }
 .td-caps .muted { white-space: nowrap; }
 .td-caps .sc-num { width: 72px; }
 @media (max-width: 700px) { .g4.td-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ------------------------------------------------------------ 模型实验室 */
+.lb-train { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .lb-train { grid-template-columns: minmax(0, 1fr); } }
+.lb-sets { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.lb-set { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 8px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; font: inherit; }
+.lb-set b { font-size: 13px; } .lb-set span { font-size: 12px; }
+.lb-set em { font-style: normal; font-size: 12px; color: var(--text-3); line-height: 1.5; }
+.lb-set:hover { border-color: var(--primary); }
+.lb-set.on { border-color: var(--primary); background: var(--primary-weak); }
+.lb-set:disabled { opacity: .5; cursor: not-allowed; }
+.lb-groups { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12.5px; color: var(--text-2); }
+.lb-why { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12.5px; }
+
+/* ------------------------------------------------------------ 首页：账户 / 明日计划 / 提醒 */
+.dash-trade { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 1100px) { .dash-trade { grid-template-columns: minmax(0, 1fr); gap: 12px; } }
+.dt-list { display: flex; flex-direction: column; gap: 6px; }
+.dt-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-sm);
+  color: var(--text); text-decoration: none; font-size: 13px; }
+.dt-row:hover { background: var(--surface-2); }
+.dt-alert { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dt-night { display: flex; flex-direction: column; gap: 6px; }
+.dt-big { font-size: 15px; } .dt-big b { font-size: 22px; }
+
+/* 新手指南：功能说明 */
+.gd-feat { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.gd-feat:last-child { border-bottom: 0; }
+.gd-feat-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gd-feat-hd .btn { margin-left: auto; }
+.gd-feat p { margin: 4px 0 0; font-size: 13px; line-height: 1.7; }

@@ -152,4 +152,42 @@ def _nightly(params: dict, progress: Progress) -> Any:
     return {"date": n["date"], "accounts": len(n["accounts"]), "candidates": len(n["candidates"])}
 
 
+@task("lab_train", "模型实验室：训练", group=HEAVY,
+      description="按选的范围、因子、目标、模型滚动训练（每段只用之前的数据），样本外评估并和同日随机比；耗时几分钟到一小时以上")
+def _lab_train(params: dict, progress: Progress) -> Any:
+    from .modellab import train
+    return train.run(params.get("config") or params, progress=progress)
+
+
+@task("lab_factor_test", "模型实验室：单因子检验", group=HEAVY,
+      description="不训练模型，逐个检验因子和之后超额收益的关系（RankIC、t 值），分样本内 / 样本外")
+def _lab_factor_test(params: dict, progress: Progress) -> Any:
+    from .modellab import factor_test
+    return factor_test.run(params.get("config") or params, progress=progress)
+
+
+@task("lab_score", "模型实验室：给最新一天打分", group=HEAVY, description="用启用的模型给本地数据最新一天的股票打分（选股器“模型打分”用）")
+def _lab_score(params: dict, progress: Progress) -> Any:
+    from .modellab import store
+    res = store.latest_scores(params.get("run_id"), force=bool(params.get("force")), progress=progress)
+    return {"run_id": res["run_id"], "date": res["date"], "rows": len(res["rows"])}
+
+
+@task("strategy_backtest", "策略回测", group=HEAVY,
+      description="在内存账本里逐日跑真正的模拟盘规则（T+1、手续费、止损、移动止盈），和同样规则的随机选股比，分选择期 / 留出期")
+def _strategy_backtest(params: dict, progress: Progress) -> Any:
+    from .strategy import backtest, store
+    res = backtest.run(params["template"], params.get("params"), progress=progress)
+    store.save_backtest(res)
+    if params.get("item_id"):
+        store.update(params["item_id"], backtest_key=res["key"])
+    return {"key": res["key"], "verdict": res["verdict"]}
+
+
+@task("strategy_follow", "策略模拟跟踪", group=HEAVY, description="开启了模拟跟踪 / 实盘建议的策略，按今天收盘的信号挂明天的单或给出建议")
+def _strategy_follow(params: dict, progress: Progress) -> Any:
+    from .strategy import follow
+    return follow.run_daily(progress=progress)
+
+
 __all__ = ["EXT", "HEAVY", "TASKS", "TaskSpec", "formula_params", "job_name", "listing", "submit", "task"]

@@ -445,6 +445,58 @@
     </qw-card>`,
   };
 
+  // ------------------------------------------------------------ 首页：我的账户、明日计划、提醒
+  const TradeSummary = {
+    name: "QwTradeSummary",
+    setup() {
+      const acc = Vue.ref(null);
+      const alerts = Vue.ref(null);
+      const night = Vue.ref(undefined);                   // undefined = 还在读
+      const load = async () => {
+        const [a, b, n] = await Promise.allSettled([
+          QW.api.get("/api/trading/accounts", null, { silent: true }),
+          QW.api.get("/api/alerts", { unread: true, limit: 3 }, { silent: true }),
+          QW.api.get("/api/trading/nightly", { latest_only: true }, { silent: true }),
+        ]);
+        acc.value = a.status === "fulfilled" ? a.value : [];
+        alerts.value = b.status === "fulfilled" ? b.value : { alerts: [], unread: 0 };
+        night.value = n.status === "fulfilled" ? n.value : null;
+      };
+      Vue.onMounted(load);
+      const actions = computed(() => (night.value ? night.value.accounts.reduce((s, a) => s + a.positions.filter((p) => p.action !== "继续持有").length, 0) : 0));
+      return { acc, alerts, night, actions, fmt: QW.fmt, isNum };
+    },
+    template: `<div class="dash-trade">
+      <qw-card title="我的账户" icon="wallet" :loading="acc === null">
+        <template #extra><a class="linkbtn" href="#/trade">交易 <qw-icon name="chevronRight" :size="14"/></a></template>
+        <div v-if="acc && acc.length" class="dt-list">
+          <a v-for="a in acc.slice(0, 4)" :key="a.id" class="dt-row" href="#/trade">
+            <span><span class="qw-tag" :class="a.kind === 'live' ? 'red' : 'gray'">{{ a.kind === 'live' ? '实盘' : '模拟' }}</span> {{ a.name }}</span>
+            <span class="num"><b>{{ fmt.money(a.total) }}</b> <span :class="a.return > 0 ? 'up' : a.return < 0 ? 'down' : ''">{{ fmt.ratio(a.return, 2, true) }}</span></span>
+          </a>
+        </div>
+        <qw-empty v-else-if="acc" compact icon="wallet" title="还没有账户" desc="先建一个模拟账户练手：规则和真的一样，亏的是假钱。" action-text="去建账户" action-to="/trade"/>
+      </qw-card>
+      <qw-card title="明日计划" icon="calendar" :loading="night === undefined">
+        <template #extra><a class="linkbtn" href="#/trade?tab=nightly">查看 <qw-icon name="chevronRight" :size="14"/></a></template>
+        <div v-if="night" class="dt-night">
+          <div class="muted" style="font-size:12px">基于 {{ night.date }} 收盘 · 生成于 {{ night.generated_at }}</div>
+          <div class="dt-big"><b :class="actions ? 'down' : ''">{{ actions }}</b> 只持仓要处理 · <b>{{ night.candidates.length }}</b> 只候选</div>
+          <div v-if="night.regime" class="muted" style="font-size:12.5px">大盘{{ night.regime.label }}，总仓位建议不超过 {{ fmt.ratio(night.regime.cap, 0) }}</div>
+        </div>
+        <qw-empty v-else compact icon="calendar" title="还没有明日计划" desc="每个交易日收盘、每日更新完成后自动生成。"/>
+      </qw-card>
+      <qw-card title="提醒" icon="bell">
+        <template #extra><a class="linkbtn" href="#/trade?tab=alerts">全部 <qw-icon name="chevronRight" :size="14"/></a></template>
+        <div v-if="alerts && alerts.alerts.length" class="dt-list">
+          <div class="muted" style="font-size:12px">{{ alerts.unread }} 条未读</div>
+          <a v-for="x in alerts.alerts" :key="x.id" class="dt-row" href="#/trade?tab=alerts"><span class="dt-alert">{{ x.title }}</span><span class="muted num" style="font-size:12px">{{ (x.time || '').slice(5, 16) }}</span></a>
+        </div>
+        <qw-empty v-else compact icon="bell" title="没有未读提醒" desc="止损触发、成交、异动、明日计划都会提醒你。"/>
+      </qw-card>
+    </div>`,
+  };
+
   reg.push(["qw-kline-pro", KlinePro], ["qw-chips", Chips], ["qw-ind-picker", IndPicker],
-    ["qw-regime-card", RegimeCard], ["qw-stage-card", StageCard], ["qw-risk-card", RiskCard]);
+    ["qw-regime-card", RegimeCard], ["qw-stage-card", StageCard], ["qw-risk-card", RiskCard], ["qw-trade-summary", TradeSummary]);
 })();

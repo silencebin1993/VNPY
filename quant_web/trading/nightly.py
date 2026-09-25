@@ -88,6 +88,11 @@ def candidates(limit: int = 5) -> list[dict]:
         for r in res.get("rows", [])[:limit]:
             if r.get("shares"):
                 out.append({**r, "scheme_id": sid, "scheme_name": res.get("scheme", {}).get("name"), "result_date": res.get("date")})
+    try:                                                    # 策略中心里开启了"实盘建议"的策略
+        from ..strategy import follow
+        out += follow.live_candidates()
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 

@@ -145,8 +145,11 @@ def trading_update_plan(
 
 
 @router.get("/api/trading/nightly")
-def trading_nightly(rebuild: bool = False) -> Any:
+def trading_nightly(rebuild: bool = False, latest_only: bool = False) -> Any:
+    """明日计划：latest_only=true 只读已经生成的（首页用，不临时生成）"""
     nightly = mod("trading.nightly")
+    if latest_only:
+        return ok(nightly.latest())
     res = nightly.build() if rebuild else (nightly.latest() or nightly.build())
     return ok(res)
 

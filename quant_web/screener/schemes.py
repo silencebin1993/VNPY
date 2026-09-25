@@ -63,6 +63,7 @@ TERMS: dict[str, tuple[str, int, str]] = {
     "rev20": ("短期超跌（反转）", -1, "最近 20 天跌得多（短期反转）"),
     "turn20": ("换手率", -1, "换手率低（没有被炒热）"),
     "float_cap": ("流通市值", -1, "市值偏小"),
+    "model_score": ("模型分数", 1, "模型实验室启用的模型打分靠前"),
 }
 
 SCORING: dict[str, dict] = {
@@ -78,8 +79,19 @@ SCORING: dict[str, dict] = {
     "reversal_value": {"name": "反转 + 低估值 + 低换手",
                        "desc": "按学术研究里 A 股较稳定的规律事先定的：最近跌得多、估值低、换手低、市值偏小、赚钱效率不太差的股票排前面（没有用我们的数据调参）。",
                        "weights": {"pe_ttm": 1.5, "turn20": 1, "rev20": 1, "float_cap": 0.5, "roe": 0.5}},
+    "model": {"name": "模型打分（实验室启用的模型）",
+              "desc": "用你在模型实验室训练并启用的模型给股票打分。先在实验室看它的样本外结果（尤其留出期）再用；回测只用模型的样本外预测。",
+              "weights": {"model_score": 1}},
     "custom": {"name": "自定义权重", "desc": "自己决定每个因子的权重（0 表示不用）。", "weights": {}},
 }
+
+
+def uses_model(scheme: dict) -> bool:
+    """这个方案的打分用到了模型实验室的模型"""
+    sc: dict = scheme.get("scoring") or {}
+    if sc.get("scheme") == "model":
+        return True
+    return sc.get("scheme") == "custom" and abs(float((sc.get("weights") or {}).get("model_score") or 0)) > 0
 
 STAGES: dict[str, str] = {"accumulation": "吸筹", "washout": "洗盘", "markup": "拉升", "distribution": "出货",
                           "decline": "下跌", "unclear": "不明确"}

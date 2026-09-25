@@ -22,8 +22,11 @@ def _profile_risk() -> tuple[dict, dict]:
 
 def _bt_params(scheme: dict, profile: dict, hold: int | None = None, rebalance: int | None = None) -> dict:
     h: int = int(hold or DEFAULT_BT["hold"])
-    return {"hold": h, "rebalance": int(rebalance or h), "use_chips": True,
-            "boards": scheme["universe"]["boards"] or list(profile.get("boards") or ["main"])}
+    params: dict = {"hold": h, "rebalance": int(rebalance or h), "use_chips": True,
+                    "boards": scheme["universe"]["boards"] or list(profile.get("boards") or ["main"])}
+    if mod("screener.schemes").uses_model(scheme):
+        params["model_run"] = mod("modellab.store").enabled()          # 换了启用的模型，回测结果不能共用
+    return params
 
 
 @router.get("/api/screener/schemes")

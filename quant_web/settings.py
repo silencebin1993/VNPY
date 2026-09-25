@@ -234,6 +234,15 @@ class AssistantSettings(BaseModel):
     fund_flow_limit: int = Field(300, ge=0, le=3000)        # 每天最多拉多少只股票的资金流（持仓+自选+候选）
 
 
+class LabSettings(BaseModel):
+    """模型实验室：训练前先估算内存，超过上限就拦下（本机 31GB，默认留一半余量）"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    max_mem_gb: float = Field(20.0, ge=2, le=512)           # 一次训练最多用多少内存（GB）
+    threads: int = Field(0, ge=0, le=256)                   # 训练用几个 CPU 线程（0 = 自动：全部核心减 1）
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -249,13 +258,14 @@ class Settings(BaseModel):
     notify: NotifySettings = Field(default_factory=NotifySettings)
     monitor: MonitorSettings = Field(default_factory=MonitorSettings)
     assistant: AssistantSettings = Field(default_factory=AssistantSettings)
+    lab: LabSettings = Field(default_factory=LabSettings)
 
 
 # load() 里某一部分损坏时逐部分恢复用（新增分组必须登记在这里，否则别处出错时会被悄悄重置成默认值）
 PARTS: dict[str, type[BaseModel]] = {
     "predict": PredictSettings, "trade": TradeSettings, "profile": ProfileSettings, "providers": ProviderSettings,
     "risk": RiskSettings, "live": LiveSettings, "notify": NotifySettings, "monitor": MonitorSettings,
-    "assistant": AssistantSettings,
+    "assistant": AssistantSettings, "lab": LabSettings,
 }
 
 
@@ -275,7 +285,7 @@ FIELD_LABELS: dict[str, str] = {
     "auto_update": "自动更新", "risk_ack": "风险提示确认",
     # 第三版新增
     "profile": "我的情况", "providers": "数据源", "risk": "纪律风控", "live": "实盘", "notify": "提醒推送",
-    "monitor": "盘中监控", "assistant": "投资助手",
+    "monitor": "盘中监控", "assistant": "投资助手", "lab": "模型实验室", "max_mem_gb": "内存上限(GB)", "threads": "训练线程数",
     "horizon": "操作周期", "risk_per_trade": "单笔最多亏", "watch_time": "看盘时间", "onboarded": "已完成向导",
     "chains": "数据源顺序", "tushare_token": "tushare token", "qmt_path": "QMT 目录",
     "max_single_pct": "单只最多占比", "regime_caps": "大盘环境仓位上限", "daily_loss_limit": "单日亏损上限",

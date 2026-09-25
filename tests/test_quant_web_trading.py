@@ -419,3 +419,18 @@ def test_broker_sync_skips_unbookable_trade_once(ws: Path) -> None:
         al = ledger.rows(c, "SELECT * FROM alerts WHERE kind='sync_mismatch'")
         pos = ledger.one(c, "SELECT * FROM positions WHERE account_id=? AND code='600000'", (acc["id"],))
     assert len(al) == 1 and "没能记账" in al[0]["title"] and pos["qty"] == 200
+
+
+def test_matching_skips_orders_cancelled_earlier_in_the_same_loop(ws: Path) -> None:
+    """止损单先成交、平仓时撤掉了同一持仓的止盈单；撮合循环轮到止盈单时不能再撤一次（以前会让整个日终报错）"""
+    acc = ledger.create_account("模拟", "paper", "paper", 100_000)
+    with ledger.connect() as c:
+        p = plans.create(c, acc["id"], "600000", "浦发", 10.0, 9.5, 12.0, "none", 20)
+        engine.place(c, acc["id"], OrderRequest("600000", "buy", 1000, "limit", 10.0, plan_id=p["id"]), trade_date=DAYS[0])
+        engine.match_with_bars(c, acc["id"], DAYS[0], {"600000": bar(DAYS[0], 10.0, 10.1, 9.9, 10.0, 10.0)})
+        engine.settle_day(c, acc["id"], DAYS[0], {"600000": 10.0})
+        engine.place(c, acc["id"], OrderRequest("600000", "sell", 1000, "take_profit", trigger=12.0, plan_id=p["id"]), trade_date=DAYS[1])
+        fills = engine.match_with_bars(c, acc["id"], DAYS[1], {"600000": bar(DAYS[1], 9.4, 9.5, 9.3, 9.4, 10.0)})     # 跳空跌破止损
+        assert len(fills) == 1 and fills[0]["side"] == "sell" and fills[0]["price"] == 9.4
+        left = ledger.rows(c, "SELECT status FROM orders WHERE account_id=? AND kind='take_profit'", (acc["id"],))
+        assert left[0]["status"] == "cancelled"

@@ -3,7 +3,6 @@ from datetime import date, timedelta
 
 import numpy as np
 import polars as pl
-import pytest
 
 from quant_web.analysis import features, stage, stage_stats
 from quant_web.formula import engine

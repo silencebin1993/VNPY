@@ -121,6 +121,8 @@
     { name: "sectors", path: "/sectors", title: "板块强弱", icon: "layers", group: "market" },
     { name: "screener", path: "/screener", title: "选股器", icon: "filter", tab: true, group: "pick" },
     { name: "formula", path: "/formula", title: "公式库", icon: "sigma", group: "pick" },
+    { name: "strategy", path: "/strategy", title: "策略中心", icon: "compass", group: "strategy" },
+    { name: "lab", path: "/lab", title: "模型实验室", icon: "flask", group: "strategy" },
     { name: "predict", path: "/predict", title: "短线观察", icon: "rocket", group: "strategy" },
     { name: "model", path: "/model", title: "模型中心", icon: "cpu", group: "strategy" },
     { name: "settings", path: "/settings", title: "预测设置", icon: "sliders", group: "strategy" },

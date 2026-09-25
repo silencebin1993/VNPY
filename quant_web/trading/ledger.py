@@ -122,6 +122,21 @@ def connect() -> Iterator[sqlite3.Connection]:
             conn.close()
 
 
+@contextmanager
+def isolated() -> Iterator[sqlite3.Connection]:
+    """当前线程临时改用一个内存账本（策略回测用）：with 期间所有账本函数都用它，不拿全局锁、不碰真实账本"""
+    outer = getattr(_local, "conn", None)
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA)
+    _local.conn = conn
+    try:
+        yield conn
+    finally:
+        _local.conn = outer
+        conn.close()
+
+
 def rows(conn: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict]:
     return [dict(r) for r in conn.execute(sql, args).fetchall()]
 

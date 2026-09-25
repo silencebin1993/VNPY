@@ -243,6 +243,41 @@ def _codes_in_play(conn, account_id: str) -> list[str]:
     return list(dict.fromkeys(a + b))
 
 
+def plan_close(conn, account_id: str, kind: str, day: date, bars: dict[str, rules.Bar], levels, alerts: bool = True) -> list[str]:
+    """收盘评估每个生效的交易计划（移动止盈上移止损、离场信号、超期、到目标）；模拟盘的离场信号 → 下一个交易日开盘市价卖。
+    levels(code) -> {ma10, ma20, atr}（真实价格口径）"""
+    notes: list[str] = []
+    for p in ledger.rows(conn, "SELECT * FROM plans WHERE account_id=? AND status='active'", (account_id,)):
+        b = bars.get(p["code"])
+        if b is None:
+            continue
+        lv = levels(p["code"]) or {}
+        for a in plans.evaluate_close(conn, p, b.close, lv.get("ma10"), lv.get("ma20"), lv.get("atr"), day):
+            if alerts:
+                level = "warn" if a["type"] in ("exit_signal", "overdue", "target") else "info"
+                ledger.alert(conn, account_id, p["code"], level, f"plan_{a['type']}", f"{p.get('name') or p['code']}：{a['text']}")
+            notes.append(f"{p.get('name') or p['code']}：{a['text']}")
+            if a["type"] == "exit_signal" and kind == "paper":
+                pos = ledger.one(conn, "SELECT * FROM positions WHERE account_id=? AND code=?", (account_id, p["code"]))
+                qty = int(pos["available"]) - _open_sell_qty(conn, account_id, p["code"]) if pos else 0
+                if qty > 0:
+                    try:
+                        engine.place(conn, account_id, OrderRequest(p["code"], "sell", qty, "market", name=p.get("name"),
+                                                                    reason="计划：收盘跌破均线", plan_id=p["id"], source="plan"),
+                                     trade_date=tcal.next_trading_day(day))
+                    except ValueError as e:
+                        notes.append(f"{p.get('name') or p['code']}：离场卖单没有下成（{e}）")
+    return notes
+
+
+def paper_eod(conn, account_id: str, day: date, bars: dict[str, rules.Bar], levels, alerts: bool = True) -> tuple[list[dict], list[str]]:
+    """模拟盘一天的收盘处理：除权 → 按日线撮合 → 交易计划收盘评估（不含资产快照）。
+    每日流水线和策略回测调用的是同一个函数，保证回测和模拟盘的规则完全一样"""
+    engine.apply_ex_rights(conn, account_id, {k: b.preclose for k, b in bars.items()})
+    fills: list[dict] = engine.match_with_bars(conn, account_id, day, bars)
+    return fills, plan_close(conn, account_id, "paper", day, bars, levels, alerts)
+
+
 def run_eod(day: date | None = None, progress=None) -> dict:
     """收盘后（日线更新之后）：模拟盘按日线撮合、除权、移动止盈、资产快照；实盘同步成交、检查计划；最后推送摘要"""
     from .. import notify
@@ -264,8 +299,7 @@ def run_eod(day: date | None = None, progress=None) -> dict:
         notes: list[str] = []
         with ledger.connect() as c:
             if acc["kind"] == "paper":
-                engine.apply_ex_rights(c, acc["id"], {k: b.preclose for k, b in bars.items()})
-                fills = engine.match_with_bars(c, acc["id"], day, bars)
+                fills, notes = paper_eod(c, acc["id"], day, bars, recent_levels)
             else:
                 broker = get_broker(acc, {"live": s["live"]})
                 if broker.can_auto:
@@ -275,25 +309,7 @@ def run_eod(day: date | None = None, progress=None) -> dict:
                         res = {"error": str(e)}
                     if res.get("error"):
                         notes.append(f"同步券商成交失败：{res['error']}")
-            for p in ledger.rows(c, "SELECT * FROM plans WHERE account_id=? AND status='active'", (acc["id"],)):
-                b = bars.get(p["code"])
-                if b is None:
-                    continue
-                lv = recent_levels(p["code"])
-                for a in plans.evaluate_close(c, p, b.close, lv.get("ma10"), lv.get("ma20"), lv.get("atr"), day):
-                    level = "warn" if a["type"] in ("exit_signal", "overdue", "target") else "info"
-                    ledger.alert(c, acc["id"], p["code"], level, f"plan_{a['type']}", f"{p.get('name') or p['code']}：{a['text']}")
-                    notes.append(f"{p.get('name') or p['code']}：{a['text']}")
-                    if a["type"] == "exit_signal" and acc["kind"] == "paper":
-                        pos = ledger.one(c, "SELECT * FROM positions WHERE account_id=? AND code=?", (acc["id"], p["code"]))
-                        qty = int(pos["available"]) - _open_sell_qty(c, acc["id"], p["code"]) if pos else 0
-                        if qty > 0:
-                            try:
-                                engine.place(c, acc["id"], OrderRequest(p["code"], "sell", qty, "market", name=p.get("name"),
-                                                                        reason="计划：收盘跌破均线", plan_id=p["id"], source="plan"),
-                                             trade_date=tcal.next_trading_day(day))
-                            except ValueError as e:
-                                notes.append(f"{p.get('name') or p['code']}：离场卖单没有下成（{e}）")
+                notes += plan_close(c, acc["id"], "live", day, bars, recent_levels)
             snap = engine.settle_day(c, acc["id"], day, {k: b.close for k, b in bars.items()})
         summary["accounts"].append({"id": acc["id"], "name": acc["name"], "fills": len(fills), "notes": notes, **snap})
         if fills or notes:

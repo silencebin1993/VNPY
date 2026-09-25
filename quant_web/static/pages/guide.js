@@ -31,11 +31,11 @@
   const ROUTINE = [
     { when: "每天收盘后（15:35 以后）", title: "一键更新数据", page: "data", icon: "refresh", text: "程序会在交易日收盘后自动更新；如果电脑当时没开，打开后点右上角“一键更新”。" },
     { when: "晚上第 1 步", title: "看大盘环境", page: "dashboard", icon: "pulse", text: "先看今天市场是强势、震荡还是弱势，以及建议的总仓位上限。弱势时少买甚至不买。" },
-    { when: "晚上第 2 步", title: "处理持仓", page: "trade", icon: "briefcase", text: "看“明日计划”里每只持仓的止损价、目标价，有没有出现出货信号。需要卖的，按计划执行。" },
-    { when: "晚上第 3 步", title: "选股", page: "screener", icon: "filter", text: "用默认的选股方案看看今天有哪些候选，程序会标出主力阶段、风险和建议股数。" },
+    { when: "晚上第 2 步", title: "处理持仓", page: "trade", query: "tab=nightly", icon: "briefcase", text: "看“明日计划”里每只持仓的止损价、目标价，有没有出现出货信号。需要卖的，按计划执行。" },
+    { when: "晚上第 3 步", title: "选股", page: "screener", icon: "filter", text: "用默认的选股方案看看今天有哪些候选，程序会标出主力阶段、风险和建议股数。在「策略中心」开了“实盘建议”的策略，它的候选已经放进明日计划里了。" },
     { when: "晚上第 4 步", title: "逐只诊断", page: "watch", icon: "candle", text: "点进候选股看 K 线、量价关系、筹码和排雷清单，确认没有明显问题。" },
-    { when: "晚上第 5 步", title: "确认明日买单 + 设条件单", page: "trade", icon: "listCheck", text: "在明日计划里确认要买的股票；然后按“条件单清单”在券商 App 里把止损条件单设好（电脑关机也能止损）。" },
-    { when: "每周一次", title: "复盘", page: "trade", icon: "history", text: "看看自己有没有挪止损、追高、补仓摊平。纪律比选股更重要。" },
+    { when: "晚上第 5 步", title: "确认明日买单 + 设条件单", page: "trade", query: "tab=nightly", icon: "listCheck", text: "在明日计划里确认要买的股票；然后按“条件单清单”在券商 App 里把止损条件单设好（电脑关机也能止损）。" },
+    { when: "每周一次", title: "复盘", page: "trade", query: "tab=review", icon: "history", text: "看看自己有没有挪止损、追高、补仓摊平。纪律比选股更重要。" },
   ];
 
   const REMINDERS = [
@@ -47,6 +47,35 @@
     { icon: "flame", tone: "warn", title: "别追高，别补仓摊平", text: "当天已经大涨的股票要二次确认；亏损的股票不要越跌越买。程序会在你这样做时提醒你。" },
   ];
 
+  // 功能说明：每个页面是干什么的、现在能不能拿来赚钱（实话实说）
+  const STATUS = { ok: ["blue", "可以用"], ref: ["gray", "只能参考"], unproven: ["warn", "没证明能赚钱"], watch: ["red", "只观察，别照着买"] };
+  const FEATURES = [
+    { group: "行情", items: [
+      { page: "dashboard", name: "市场情绪（首页）", status: "ok", text: "大盘环境（强势/震荡/弱势 → 建议总仓位上限）、情绪温度、你的账户、明日计划、未读提醒。大盘环境只用来控制仓位，不用来猜涨跌。" },
+      { page: "watch", name: "看盘 / 个股诊断", status: "ref", text: "多指标 K 线、筹码分布（估算）、主力阶段证据（吸筹/洗盘/拉升/出货）、排雷清单、资金流。能帮你看清量价、避开明显的坑；主力阶段的历史验证没有跑赢随机，别单凭它买。" },
+      { page: "watchlist", name: "自选股", status: "ok", text: "关注的股票和实时行情；盘中监控也会给自选股做异动提醒。" },
+      { page: "sectors", name: "板块强弱", status: "ref", text: "按行业汇总的 5/20/60 日强弱和龙头股，看热点轮动用。" },
+    ] },
+    { group: "选股", items: [
+      { page: "screener", name: "选股器", status: "unproven", text: "按方案（范围 → 条件 → 排雷 → 打分）选股，给出建议止损和按风险算好的股数；每个方案都能做历史回测（样本外、和同日随机比）。目前所有方案都没有显著跑赢随机，默认方案的好处是回撤更小。" },
+      { page: "formula", name: "公式库", status: "unproven", text: "通达信风格的公式（25 个内置 + 你自己写的），禁止未来函数；可以看历史上信号出现后真实的表现。经典的均线金叉、放量突破都没有跑赢随机。" },
+    ] },
+    { group: "策略", items: [
+      { page: "strategy", name: "策略中心", status: "unproven", text: "选股 + 买卖规则 + 仓位 + 大盘过滤组成一个策略：先诚实回测（真正的模拟盘规则，和同样规则随机选股比），再模拟跟踪，最后才生成实盘建议。" },
+      { page: "lab", name: "模型实验室", status: "unproven", text: "自己组合股票范围、因子、预测目标和模型训练选股模型（你点了才训练），结果全部是样本外的；在留出期有优势的模型才值得启用到选股器。" },
+      { page: "predict", name: "短线观察（连板/首板）", status: "watch", text: "能预测谁更可能涨停，但按真实规则去买会亏钱，比随机还差。只用来观察市场热度。" },
+    ] },
+    { group: "交易", items: [
+      { page: "trade", name: "交易", status: "ok", text: "模拟盘和实盘账户、下单前逐条风控检查、交易计划（止损/目标/移动止盈）、明日计划和券商条件单清单、提醒、复盘（R 倍数、人性陷阱）、推送设置、一键停止实盘。" },
+      { page: "paper", name: "策略跟踪（旧）", status: "unproven", text: "旧的“强势股波段”模型的模拟跟踪记录。留出期没有跑赢随机。" },
+    ] },
+    { group: "更多", items: [
+      { page: "etf", name: "稳健 ETF", status: "ok", text: "多资产 ETF 趋势配置，适合放大部分资金做底仓（历史回测年化约 8.9%、最大回撤约 11%，参数在同一段历史上选的，真实效果可能差一些）。" },
+      { page: "data", name: "数据中心", status: "ok", text: "一键更新数据、后台任务、扩展数据（资金流、融资融券、解禁等）。" },
+      { page: "sources", name: "数据源", status: "ok", text: "每种数据用哪个数据源、失败时换哪个，可以测试连接。" },
+    ] },
+  ];
+
   QW.page("guide", {
     props: ["params", "query"],
     setup(props) {
@@ -56,6 +85,7 @@
         { value: "routine", label: "每天怎么用", icon: "calendar" },
         { value: "glossary", label: "名词解释", icon: "book" },
         { value: "remind", label: "重要提醒", icon: "alert" },
+        { value: "features", label: "功能说明", icon: "grid" },
       ];
 
       // ---------------------------------------------------------- 向导
@@ -115,14 +145,14 @@
       });
 
       const pageReady = (name) => !!QW.pages[name];
-      const pageLink = (name) => {
+      const pageLink = (name, query) => {
         const r = (QW.ROUTES || []).find((x) => x.name === name);
-        return r ? "#" + (r.nav || r.path) : "#/";
+        return r ? "#" + (r.nav || r.path) + (query ? "?" + query : "") : "#/";
       };
 
       return {
         store, fmt, tab, tabs, loading, saving, step, STEPS, form, onboarded, BOARD_OPTS, WATCH_OPTS, HORIZON_OPTS, RISK_OPTS,
-        toggleBoard, riskMoney, perStockMax, capOk, horizonHint, next, prev, save, q, cat, cats, terms, ROUTINE, REMINDERS,
+        toggleBoard, riskMoney, perStockMax, capOk, horizonHint, next, prev, save, q, cat, cats, terms, ROUTINE, REMINDERS, FEATURES, STATUS,
         pageReady, pageLink,
       };
     },
@@ -214,7 +244,7 @@
             <div class="gd-rt-main">
               <div class="gd-rt-when muted">{{ r.when }}</div>
               <div class="gd-rt-title">{{ r.title }}
-                <a v-if="pageReady(r.page)" class="btn sm" :href="pageLink(r.page)">去看看<qw-icon name="chevronRight" :size="13"/></a>
+                <a v-if="pageReady(r.page)" class="btn sm" :href="pageLink(r.page, r.query)">去看看<qw-icon name="chevronRight" :size="13"/></a>
                 <span v-else class="qw-tag">建设中</span>
               </div>
               <div class="text-2">{{ r.text }}</div>
@@ -238,6 +268,18 @@
           <qw-empty v-if="!terms.length" icon="search" title="没有找到" desc="换个词试试" compact/>
         </div>
       </qw-card>
+
+      <!-- ================= 功能说明 ================= -->
+      <template v-else-if="tab === 'features'">
+        <div class="gd-note"><qw-icon name="info" :size="15"/><span>每个页面是干什么的，以及<b>现在能不能拿来赚钱</b>（实话实说）。“没证明能赚钱”不是说一定亏，而是历史样本外检验没有显著跑赢“同一天随便买”，所以只能小仓位、先模拟。</span></div>
+        <qw-card v-for="g in FEATURES" :key="g.group" :title="g.group" :pad="false">
+          <div class="gd-feat" v-for="f in g.items" :key="f.page">
+            <div class="gd-feat-hd"><b>{{ f.name }}</b><span class="qw-tag" :class="STATUS[f.status][0]">{{ STATUS[f.status][1] }}</span>
+              <a v-if="pageReady(f.page)" class="btn sm ghost" :href="pageLink(f.page)">打开<qw-icon name="chevronRight" :size="13"/></a></div>
+            <p class="text-2">{{ f.text }}</p>
+          </div>
+        </qw-card>
+      </template>
 
       <!-- ================= 重要提醒 ================= -->
       <div v-else class="gd-remind">

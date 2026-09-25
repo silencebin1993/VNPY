@@ -176,13 +176,22 @@ def expire_day_orders(conn: sqlite3.Connection, account_id: str, day: date) -> i
     return len(olds)
 
 
+def _still_open(conn: sqlite3.Connection, o: dict) -> dict | None:
+    """撮合循环开始时读到的委托，轮到它时再看一眼最新状态（已成交 / 已撤的跳过）"""
+    cur = ledger.one(conn, "SELECT * FROM orders WHERE id=?", (o["id"],))
+    return cur if cur is not None and cur["status"] in ("submitted", "partial", "waiting_trigger") else None
+
+
 def match_with_bars(conn: sqlite3.Connection, account_id: str, day: date, bars: dict[str, rules.Bar]) -> list[dict]:
     """模拟盘日终撮合：当天有效的委托 + 条件单，按当天日线判断能否成交"""
     done: list[dict] = []
     # 条件单（gtc）从创建起一直有效，不受委托日期限制（当天买的股票当天不能卖，由可卖数量保证）
     orders = ledger.rows(conn, "SELECT * FROM orders WHERE account_id=? AND status IN ('submitted','partial','waiting_trigger') "
-                               "AND (trade_date<=? OR valid='gtc') ORDER BY created", (account_id, day.isoformat()))
+                               "AND (trade_date<=? OR valid='gtc') ORDER BY created, rowid", (account_id, day.isoformat()))
     for o in orders:
+        o = _still_open(conn, o)                                        # 前面的成交可能已经把它撤掉了（例如平仓后撤掉其余条件单）
+        if o is None:
+            continue
         bar: rules.Bar | None = bars.get(o["code"])
         if bar is None:
             continue                                                    # 停牌：不成交，条件单继续等
@@ -207,8 +216,11 @@ def match_with_quotes(conn: sqlite3.Connection, account_id: str, day: date, quot
     done: list[dict] = []
     # 条件单（gtc）从创建起一直有效，不受委托日期限制（当天买的股票当天不能卖，由可卖数量保证）
     orders = ledger.rows(conn, "SELECT * FROM orders WHERE account_id=? AND status IN ('submitted','partial','waiting_trigger') "
-                               "AND (trade_date<=? OR valid='gtc') ORDER BY created", (account_id, day.isoformat()))
+                               "AND (trade_date<=? OR valid='gtc') ORDER BY created, rowid", (account_id, day.isoformat()))
     for o in orders:
+        o = _still_open(conn, o)
+        if o is None:
+            continue
         q = quotes.get(o["code"])
         if not q:
             continue

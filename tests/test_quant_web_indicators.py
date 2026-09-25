@@ -127,7 +127,7 @@ def test_groups_do_not_leak_between_stocks() -> None:
                lambda s, c: F.avedev(s, 14, c), lambda s, c: F.ref(s, 2, c), lambda s, c: F.std(s, 20, c)):
         whole = fn(both["close"], ctx).to_list()
         single = fn(pl.Series(d1["close"]), Ctx(None, 120)).to_list() + fn(pl.Series(d2["close"]), Ctx(None, 80)).to_list()
-        for i, (a, b) in enumerate(zip(whole, single)):
+        for i, (a, b) in enumerate(zip(whole, single, strict=True)):
             assert near(a, b, 1e-9), (i, a, b)
     cond = both["close"] > both["open"]
     got = F.barslast(cond, ctx).to_list()
@@ -143,30 +143,30 @@ def test_macd_kdj_rsi_boll_match_formulas() -> None:
     ctx = Ctx(None, df.height)
     c, h, lo = list(d["close"]), list(d["high"]), list(d["low"])
     lines = {k: s for k, _, s, _ in ta.macd(df, ctx)}
-    dif = [a - b for a, b in zip(r_ema(c, 12), r_ema(c, 26))]
+    dif = [a - b for a, b in zip(r_ema(c, 12), r_ema(c, 26), strict=True)]
     dea = r_ema(dif, 9)
     check(lines["dif"], dif)
     check(lines["dea"], dea)
-    check(lines["macd"], [(a - b) * 2 for a, b in zip(dif, dea)])
+    check(lines["macd"], [(a - b) * 2 for a, b in zip(dif, dea, strict=True)])
 
     lines = {k: s for k, _, s, _ in ta.kdj(df, ctx)}
     ll, hh = r_llv(lo, 9), r_hhv(h, 9)
-    rsv = [(ci - a) / (b - a) * 100 if b != a else 50.0 for ci, a, b in zip(c, ll, hh)]
+    rsv = [(ci - a) / (b - a) * 100 if b != a else 50.0 for ci, a, b in zip(c, ll, hh, strict=True)]
     k = r_sma(rsv, 3, 1)
     dd = r_sma(k, 3, 1)
     check(lines["k"], k)
     check(lines["d"], dd)
-    check(lines["j"], [3 * a - 2 * b for a, b in zip(k, dd)])
+    check(lines["j"], [3 * a - 2 * b for a, b in zip(k, dd, strict=True)])
 
     lines = {k: s for k, _, s, _ in ta.rsi(df, ctx)}
     diff = [0.0] + [c[i] - c[i - 1] for i in range(1, len(c))]
     up = r_sma([max(v, 0) for v in diff], 6, 1)
     ab = r_sma([abs(v) for v in diff], 6, 1)
-    check(lines["rsi1"], [a / b * 100 if b else None for a, b in zip(up, ab)], skip=1)
+    check(lines["rsi1"], [a / b * 100 if b else None for a, b in zip(up, ab, strict=True)], skip=1)
 
     lines = {k: s for k, _, s, _ in ta.boll(df, ctx)}
     mid, sd = r_ma(c, 20), r_std(c, 20)
-    check(lines["upper"], [None if m is None else m + 2 * s for m, s in zip(mid, sd)])
+    check(lines["upper"], [None if m is None else m + 2 * s for m, s in zip(mid, sd, strict=True)])
 
 
 def test_obv_dmi_cci_formulas() -> None:
@@ -193,7 +193,7 @@ def test_obv_dmi_cci_formulas() -> None:
     assert tr[0] is None
 
     cc = {k: s for k, _, s, _ in ta.cci(df, ctx)}["cci"]
-    typ = [(a + b + x) / 3 for a, b, x in zip(h, lo, c)]
+    typ = [(a + b + x) / 3 for a, b, x in zip(h, lo, c, strict=True)]
     w = np.array(typ[i - 13:i + 1])
     assert near(cc[i], (typ[i] - w.mean()) / (0.015 * np.abs(w - w.mean()).mean()), 1e-9)
 

@@ -133,21 +133,9 @@ def load_or_build_history(use_chips: bool = True, progress: Callable[[float, str
     return table, frame
 
 
-def run(scheme: dict, *, hold: int = 10, rebalance: int | None = None, profile: dict | None = None,
-        use_chips: bool = True, cost: costs_mod.Costs | None = None, history_cache: dict | None = None,
-        progress: Callable[[float, str], None] | None = None) -> dict:
-    say = progress or (lambda f, m: None)
-    scheme = S.validate_scheme(scheme)
-    rebalance = rebalance or hold
-    cost = cost or costs_mod.DEFAULT
-    profile = profile or {}
-    boards: list[str] = scheme["universe"]["boards"] or list(profile.get("boards") or ["main"])
-    hc = history_cache if history_cache is not None else {}
-    if hc.get("use_chips") != use_chips or "table" not in hc:
-        table, frame = load_or_build_history(use_chips, progress=lambda f, m: say(f * 0.8, m))
-        hc.update({"table": table, "frame": frame, "use_chips": use_chips})
-    table, frame = hc["table"], hc["frame"]
-    say(0.82, "正在按方案筛选每个调仓日……")
+def build_daily(scheme: dict, table: pl.DataFrame, frame: pl.DataFrame, boards: list[str]) -> pl.DataFrame:
+    """全历史"每只股票每天"的表，加上 eligible（在方案范围里）、cond（满足方案条件）、red / yellow（历史上可知的排雷项）。
+    方案回测和策略回测共用（scheme 已校验）"""
     try:
         from ..market import fundamentals
         fund = fundamentals.load_fundamentals()
@@ -162,9 +150,6 @@ def run(scheme: dict, *, hold: int = 10, rebalance: int | None = None, profile: 
     if u["min_amount"] > 0:
         elig = elig & (pl.col("amt20").fill_null(0) >= u["min_amount"])
     df = df.with_columns(elig.fill_null(False).alias("eligible"))
-    days: list[date] = sorted(df["date"].unique().to_list())
-    start_idx: int = 260                                      # 前面约一年用来"热身"（年线、相对强度等需要历史）
-    reb_days: set = set(days[start_idx::rebalance]) if len(days) > start_idx else set()
     # 条件
     masks: list[pl.Series] = []
     for c in scheme["conditions"]:
@@ -193,12 +178,49 @@ def run(scheme: dict, *, hold: int = 10, rebalance: int | None = None, profile: 
     if "net_profit_ttm" in df.columns:
         yellow = yellow | (pl.col("net_profit_ttm").fill_null(1) < 0)
     df = df.with_columns(cond.alias("cond"), red.fill_null(False).alias("red"), yellow.fill_null(False).alias("yellow"))
+    return df
+
+
+def pick_expr(scheme: dict) -> pl.Expr:
+    """这一天可以被选中的行：在范围里、满足条件、没有被排雷去掉"""
     pick = pl.col("eligible") & pl.col("cond")
     if scheme["risk"]["exclude_red"]:
         pick = pick & ~pl.col("red")
     if scheme["risk"]["exclude_yellow"]:
         pick = pick & ~pl.col("yellow")
+    return pick
+
+
+def run(scheme: dict, *, hold: int = 10, rebalance: int | None = None, profile: dict | None = None,
+        use_chips: bool = True, cost: costs_mod.Costs | None = None, history_cache: dict | None = None,
+        progress: Callable[[float, str], None] | None = None) -> dict:
+    say = progress or (lambda f, m: None)
+    scheme = S.validate_scheme(scheme)
+    rebalance = rebalance or hold
+    cost = cost or costs_mod.DEFAULT
+    profile = profile or {}
+    boards: list[str] = scheme["universe"]["boards"] or list(profile.get("boards") or ["main"])
+    hc = history_cache if history_cache is not None else {}
+    if hc.get("use_chips") != use_chips or "table" not in hc:
+        table, frame = load_or_build_history(use_chips, progress=lambda f, m: say(f * 0.8, m))
+        hc.update({"table": table, "frame": frame, "use_chips": use_chips})
+    table, frame = hc["table"], hc["frame"]
+    say(0.82, "正在按方案筛选每个调仓日……")
+    df: pl.DataFrame = build_daily(scheme, table, frame, boards)
+    days: list[date] = sorted(df["date"].unique().to_list())
+    start_idx: int = 260                                      # 前面约一年用来"热身"（年线、相对强度等需要历史）
+    reb_days: set = set(days[start_idx::rebalance]) if len(days) > start_idx else set()
+    pick = pick_expr(scheme)
     cand: pl.DataFrame = df.filter(pl.col("date").is_in(list(reb_days)) & pick)
+    model_note: str = ""
+    if S.uses_model(scheme):
+        from ..modellab import store as lab_store
+        ms = lab_store.model_scores(sorted(reb_days), include_latest=False)               # 历史日期全是滚动训练的样本外预测
+        cand = cand.join(ms, on=["code", "date"], how="left")
+        have = set(ms["date"].unique().to_list())
+        cand = cand.filter(pl.col("date").is_in(list(have)))
+        reb_days = {d for d in reb_days if d in have}
+        model_note = f"模型打分只在模型的样本外区间回测（{min(have) if have else '—'} 起），更早的调仓日跳过"
     cand = _score_by_date(cand, scheme)
     picks: pl.DataFrame = (cand.sort(["date", "score"], descending=[False, True])
                            .group_by("date", maintain_order=True).head(scheme["top_n"]).select("code", "date"))
@@ -211,7 +233,7 @@ def run(scheme: dict, *, hold: int = 10, rebalance: int | None = None, profile: 
         .join(base, on="date", how="left").with_columns((pl.col("net") - pl.col("base")).alias("excess"))
     per: pl.DataFrame = (trades.filter(pl.col("net").is_not_null()).group_by("date")
                          .agg(pl.col("net").mean().alias("port"), pl.col("base").first(), pl.len().alias("n")).sort("date"))
-    out: dict = {"hold": hold, "rebalance": rebalance, "top_n": scheme["top_n"], "boards": boards, "scheme": scheme,
+    out: dict = {"hold": hold, "rebalance": rebalance, "top_n": scheme["top_n"], "boards": boards, "scheme": scheme, "model_note": model_note,
                  "holdout_start": str(HOLDOUT_START), "use_chips": use_chips, "n_periods": per.height,
                  "n_trades": int(trades.filter(pl.col("net").is_not_null()).height),
                  "unfilled": int((~trades["filled"].fill_null(False)).sum()) if trades.height else 0,

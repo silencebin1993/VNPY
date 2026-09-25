@@ -155,6 +155,34 @@ def test_backtest_runs_and_everything_equals_baseline(env: pl.DataFrame) -> None
     assert (config.WORKSPACE / "screener" / "history" / "table_nochips.parquet").exists()     # 历史特征已缓存
 
 
+def test_model_scoring_uses_enabled_lab_model(env: pl.DataFrame) -> None:
+    """选股器"模型打分"：没启用模型时说清楚；当天用最终模型的分数；回测只用滚动训练的样本外预测"""
+    from quant_web.modellab import store as lab
+    sch = {"name": "模型", "universe": {"boards": ["main"], "min_amount": 0}, "conditions": [], "scoring": {"scheme": "model"},
+           "top_n": 5, "risk": {"exclude_red": False}}
+    assert schemes.uses_model(sch) and not schemes.uses_model({"scoring": {"scheme": "value"}})
+    with pytest.raises(ValueError, match="还没有启用的模型"):
+        engine.run(sch, profile={"boards": ["main"]})
+    rid = "20260925_120000_lightgbm_abcd"
+    codes = [c for c in env["code"].unique(maintain_order=True).to_list() if c.startswith("600")]
+    last = env["date"].max()
+    days = sorted(env["date"].unique().to_list())
+    lab._atomic_json(lab.run_dir(rid).joinpath("result.json"), {"id": rid, "created": "2026-09-25 12:00", "model": {"key": "lightgbm"}})
+    oos = pl.DataFrame({"date": [d for d in days[300:] for _ in codes], "code": codes * len(days[300:]),
+                        "pred": [float(i) for _ in days[300:] for i in range(len(codes))]})
+    oos.with_columns(pl.lit(None, dtype=pl.Float64).alias("net"), pl.lit(None, dtype=pl.Float64).alias("excess"))         .write_parquet(lab.run_dir(rid).joinpath("oos.parquet"))
+    with pytest.raises(ValueError, match="还没有启用"):
+        lab.scores_on(last)
+    lab.enable(rid)
+    with pytest.raises(ValueError, match="给最新一天打分"):
+        engine.run(sch, profile={"boards": ["main"]})
+    lab.save_latest(rid, str(last), [{"code": c, "score": float(i)} for i, c in enumerate(codes)])
+    res = engine.run(sch, profile={"boards": ["main"]})
+    assert [r["code"] for r in res["rows"]] == codes[::-1][:5]                    # 模型分数最高的排前面
+    bt = backtest.run(sch, hold=5, profile={"boards": ["main"]}, use_chips=False)
+    assert bt["model_note"].startswith("模型打分只在模型的样本外区间回测") and bt["n_periods"] > 0
+
+
 # ---------------------------------------------------------------- 接口
 
 def test_screener_api(env: pl.DataFrame, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

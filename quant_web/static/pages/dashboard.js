@@ -261,17 +261,19 @@
           <ol class="dash-guide-steps">
             <li class="here">
               <span class="n">1</span>
-              <div><b>看市场情绪</b><p>就是这一页。先看下面的<b>情绪温度</b>：{{ s.label ? '今天「' + s.label + '」' : '' }}。温度低时追涨容易亏，多看少动。</p></div>
+              <div><b>看大盘环境和情绪</b><p>就是这一页。下面的<b>大盘环境</b>告诉你现在敢用多少仓位{{ s.label ? '；情绪温度今天「' + s.label + '」' : '' }}。环境弱、温度低时多看少动。</p>
+                <a class="linkbtn" href="#/guide">还没填“我的情况”？去新手指南 <qw-icon name="chevronRight" :size="14"/></a></div>
             </li>
             <li>
               <span class="n">2</span>
-              <div><b>看“强势股波段”今天操作不操作</b><p>「短线预测」第一个名单每天收盘后告诉你：按它的规则今天有没有要“模拟买入”的股票，没有就<b>不操作</b>。它还在模拟跟踪，没有证明能赚钱。</p>
-                <a class="linkbtn" href="#/predict?kind=swing">去看今天的结论 <qw-icon name="chevronRight" :size="14"/></a></div>
+              <div><b>每天晚上看“明日计划”</b><p>收盘更新后自动生成：持仓明天怎么做、要在券商 App 设的止损条件单、候选买入（逐只点“诊断”看清楚再决定）。<b>没有合适的就不买。</b></p>
+                <a class="linkbtn" href="#/trade?tab=nightly">去看明日计划 <qw-icon name="chevronRight" :size="14"/></a></div>
             </li>
             <li>
               <span class="n">3</span>
-              <div><b>用模拟盘跟踪，满意再考虑真钱</b><p>名单里带 ★ 的股票每天会自动记进「模拟盘」，用真实行情算盈亏、不花真钱。攒够几十笔、结果满意，再考虑小仓位用真钱。</p>
-                <a class="linkbtn" href="#/paper">打开模拟盘 <qw-icon name="chevronRight" :size="14"/></a></div>
+              <div><b>先用模拟盘练，看复盘再说真钱</b><p>在「交易」建模拟账户按计划下单，或在「策略中心」开启模拟跟踪；过一两个月看「复盘」里的平均 R 和“守纪律”比例，满意再小仓位实盘。
+                要记住：我们验证过的选股方法都没有显著跑赢随机。</p>
+                <a class="linkbtn" href="#/strategy">打开策略中心 <qw-icon name="chevronRight" :size="14"/></a></div>
             </li>
           </ol>
         </div>
@@ -285,6 +287,7 @@
         </div>
 
         <qw-regime-card/>
+        <qw-trade-summary/>
 
         <qw-card v-if="!s">
           <qw-empty icon="thermo" title="情绪数据还没准备好" :desc="panelEmpty ? '下载完全市场数据后，这里会显示情绪温度和关键数字。' : '可能是本地数据还没更新，点右上角“一键更新”试试。'"/>

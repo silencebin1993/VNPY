@@ -240,6 +240,9 @@ def run(scheme: dict, *, as_of: date | None = None, profile: dict | None = None,
         df = df.filter(pl.col("risk") != "yellow")
     # 打分排序
     say(0.85, "正在打分排序……")
+    if S.uses_model(scheme):
+        from ..modellab import store as lab_store
+        df = df.join(lab_store.scores_on(last), on="code", how="left")
     df = score(df, scheme).sort("score", descending=True)
     top: pl.DataFrame = df.head(scheme["top_n"])
     capital: float = float(profile.get("capital") or 100_000)

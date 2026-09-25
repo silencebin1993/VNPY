@@ -722,3 +722,157 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
     - 复盘：统计、人性陷阱、每笔交易。
     - 交易设置：实盘（总开关二次确认；接口可用性；止损自动卖出只提供 stop_only 和 none 两个选项）、纪律与风控、提醒推送（发送测试）、盘中监控。
   - 地址参数：`?tab=` 选标签页；`?code=&name=&side=&price=&qty=&stop=&target=&reason=` 预填下单单子。
+
+### 8.17 模型实验室 `quant_web/modellab/`（P7；包名不用 lab：根目录 .gitignore 有 lab/ 规则）
+- 原则：
+  - 训练只在用户点按钮后作为后台任务运行，开发期只用合成数据测试。
+  - 结果全部是样本外，扣成本，和同日随机比，分选择期和留出期（`HOLDOUT_START` = 2025-07-01），t = min(普通 t, NW t)。
+  - `state.json` 记录完成的试验次数，页面显示"试得越多越容易碰巧"。
+- `options.py`：
+  - `UNIVERSES`：main（默认）、hs300、zz500、all、watchlist。指数范围用本地 `providers.store.load("index_members")` 里的当前成分股，结果标明有幸存者偏差。
+  - `LABELS`：excess_5 / excess_10（默认）/ excess_20（超额收益）、rank_10（当天排名 −0.5~0.5）、up5_10（分类：净赚 ≥ 5%）。
+  - `PRESETS`：fast / standard / fine，步长 12 / 6 / 3 个月。`NORMALIZE`：rank（按天截面排名，默认）/ none（只适合树模型）。
+  - `validate_config(raw)` 补默认值并校验（任务类型和模型要匹配），出错抛中文 ValueError；`describe(cfg)` 返回一句话描述。
+- `factors.py`：因子组注册表 `FACTOR_SETS`（label、short、source、cost、desc）。
+  - basic / ta / alpha158 来自公式表，alpha101 需要截面数据（实现都在 `factors_builtin.py`）。
+  - mainforce 取选股器全历史字段表的 `m_*` 列，包括主力阶段打分和当前阶段 one-hot。
+  - fundamental 按财报公布日做 join_asof，和选股器回测同一口径 `_fund_asof`：`f_ep`（每股收益 ÷ 股价）、`f_bp`、`f_roe`、`f_profit_yoy`、`f_revenue_yoy`、`f_debt_ratio`、`f_log_cap`。
+  - formula：我的公式（不含筹码函数）的选股条件（0/1）和前 3 条输出线。价格类的输出线除以收盘价。
+  - `feature_names(set)` 不计算只返回名字；另有 `feature_label`、`set_of`、`listing()`。
+- `dataset.py`：
+  - `load_base()` 复用 `screener.backtest.load_or_build_history(use_chips=False)`（按日线签名缓存）。
+  - 标签 `add_labels` 复用 `formula.validate.forward_returns`：次日开盘买（一字涨停买不进 → 空）、持有 N 天、跌停顺延、扣成本。`label_end` 为卖出日，用于净化。
+  - `add_targets`：超额 = 净收益 − 同日范围内平均。
+  - 范围：板块、上市满 60 天、非 ST、20 日均成交额 ≥ min_amount（默认 5000 万）。
+  - 因子按每 400 只股票分块计算，只保留范围内的行；全为空的因子直接去掉；`normalize` 按天排名。
+  - `build(cfg, base=, scoring_only=)` 返回 `Dataset(ds, features, sets, info)`。`scoring_only` 只取最新一天，往前回看 560 天。
+  - `estimate(cfg)` 不读数据：按股票数 × 交易日估行数，给出内存、时间、段数。超过 `settings.lab.max_mem_gb`（默认 20）或超过可用内存的 90% 时 blocked=True，附中文原因。
+- `models.py`：`MODELS` 注册 12 个模型，每个 `ModelSpec` 有 adapter、tasks、nan_ok、speed、每个预设的抽样行数上限、recommended、explain。
+  - 模型：lightgbm（推荐，唯一 explain）、xgboost、catboost、hist_gbdt、random_forest、extra_trees、ridge、lasso、elasticnet、mlp（sklearn）、logistic（只做分类）、equal_weight（对照：按训练期 IC 方向等权）。
+  - 提前停止：梯度提升树用按时间切的验证集；数值预测的指标是按天 IC `day_ic`，分类用 AUC。
+  - 存取：LightGBM 存 txt、XGBoost 存 json、CatBoost 存 cbm，其余用 joblib。所有文件都由程序自己写出。
+  - 依赖：xgboost 3.4.1、catboost 1.2.10（清华源安装）。不装 PyTorch。
+- `train.py`：`run(cfg, progress, base=None)`。
+  - 切分：`folds_for` 复用 `predict.model.make_folds`（从起始年份 + 2 年开始）；数据太短时改为按交易日切。
+  - 每段训练：`purge_mask(ds, train_end)` 净化训练行；验证集取训练期最后 10% 的交易日，训练行的 label_end 必须早于验证期开始；数值目标按训练期 1%/99% 分位截断；慢模型抽样。
+  - 最终模型用全部已揭晓的行训练。梯度提升树的轮数 = 各段最佳轮数中位数 × 1.1。
+  - `score_rows` 打分；LightGBM 额外给出每只股票贡献最大的 3 个因子。
+- `evaluate.py`：
+  - 每天的 IC 和 RankIC（均值、ICIR、t、IC>0 的比例）。
+  - 分五组的平均超额，Q5−Q1 多空，单调性。
+  - 前 K 名：每 hold 天不重叠调仓，按买进的平均；和同日范围内全部买得进的平均比，得出超额、t（NW lag 2）、年化、回撤。
+  - 选择期、留出期、全部各从新账户算。
+  - `verdict`：留出期调仓少于 6 次 → short；t ≥ 2、超额 > 0、RankIC > 0、选择期超额 > 0 → good；否则 weak 或 bad。
+- `store.py`：`workspace/modellab/`。
+  - `runs/{id}/` 下有 result.json、oos.parquet、model.*、`latest_{日期}.json`（全部股票的打分，保留 5 天）。id 形如 `20260925_120000_lightgbm_abcd`，有格式校验。
+  - `state.json` 记录启用的模型和试验次数。
+  - 函数：`enable/disable/enabled`、`list_runs/summary/get_run/delete_run`、`load_model`、`oos`、`save_latest/cached_latest/latest_scores`（日线更新后用最终模型重算）。
+  - `scores_on(day)`：最新一天必须已经打过分，否则报错并提示操作；历史日期用样本外预测。
+  - `model_scores(dates, include_latest)`。
+- `factor_test.py`：
+  - 每个因子每天和之后净收益的 Spearman RankIC。
+  - 分全部、选择期、留出期看均值、IR、t；看方向是否一致、覆盖率。两段 |t| 都 ≥ 2 且方向一致才算"比较可信"。
+  - 结果存 `factor_tests/{key}.json`。
+- 任务（HEAVY 组）：`lab_train`、`lab_factor_test`、`lab_score`。设置新增分组 `lab`（max_mem_gb、threads）。每日流水线在跑选股方案之前，如果有启用的模型，先给最新一天打分。
+- 选股器接入：
+  - `schemes.TERMS["model_score"]`、`SCORING["model"]`、`uses_model(scheme)`。
+  - `engine.run` 用 `scores_on(last)`。
+  - 方案回测只用样本外预测，只在有预测的调仓日回测，结果里加 `model_note`。
+  - 回测缓存键加上 `model_run`（启用的训练记录编号）。
+- 接口 `api/routes/lab.py`：
+  - GET `/api/lab/options`。
+  - POST `/api/lab/estimate {config}`。
+  - POST `/api/lab/train {config}`：先估算，blocked 返回 400。
+  - GET `/api/lab/runs`、GET/DELETE `/api/lab/runs/{id}`、POST `/api/lab/runs/{id}/enable`、POST `/api/lab/disable`。
+  - GET `/api/lab/scores`：只读缓存，没有时 stale=True。
+  - POST `/api/lab/score {force}`。
+  - POST `/api/lab/factor_test {config}`、GET `/api/lab/factor_test/{key}`。
+- 前端 `pages/lab.js`（`#/lab`，分组"策略"），三个标签页：
+  - 训练模型：各项下拉、因子组卡片多选、训练前估算（行数、段数、内存、时间，超限拦下）、开始训练（二次确认，后台任务）。
+  - 训练记录：列表（结论、留出期和选择期的 RankIC、前 K 超额、t）；详情有结论、分段表、累计 RankIC、前 K vs 随机、分五组、因子重要性、最新打分（LightGBM 显示原因）、滚动训练明细；可以启用、停用、删除、给最新一天打分。
+  - 单因子检验。
+
+### 8.18 策略中心 `quant_web/strategy/`（P8）
+- 定位：策略由选股信号（选股方案或实验室模型）、买入方式、卖出规则（交易计划）、仓位（按风险）、大盘过滤组成。
+  - 使用顺序：先做诚实回测，再开启模拟跟踪，最后生成实盘建议（进入明日计划，买入仍要人工确认）。
+  - **回测和模拟跟踪调用同一个每日函数**，规则完全一样。
+- `templates.py`：
+  - `TEMPLATES` 共 6 个：reversal_value、trend_swing、mainforce_follow、washout_dip、value_trend、model_rotation。每个都有 name、signal、who、desc、defaults；说明里写明已知的回测结论，没有一个标"推荐"。
+  - 选项：`ENTRY`（open / pullback，pullback 为次日低 2% 的限价单）；`TRAIL` 与 `plans.TRAIL_RULES` 一致。
+  - `resolve(template, params)` 合并参数并校验：target_r 0~10、max_days 1~250、max_positions 1~30，另有 exit_distribution、regime 两个开关。
+- `signals.py`：
+  - `selection_table(spec, table, frame, boards)` 调用 `screener.backtest.build_daily`，得到每天的 eligible / cond / red / yellow；方案回测和策略回测共用。
+  - `scores_from(spec, scheme, df, random_seed=, include_latest=)`：
+    - 方案信号：`pick_expr` 过滤后用 `_score_by_date` 打分。
+    - 模型信号：只用 `modellab.store.model_scores` 的样本外预测。
+    - 随机对照：在同一范围、同样排雷下随机打分，不用方案条件。
+  - `top_by_day`：每天取前 40 名。
+  - `PriceBook`：按（日期、代码）二分查找的真实价格日线（撮合用）和 ma10 / ma20 / atr（前复权计算后换回真实价），附主力阶段和名称。
+  - `regime_by_day()`：`regime.score_table` 每天的大盘环境，只用当天及以前的数据。
+- `step.strategy_step(conn, account, spec, day, next_day, cands, info, settings, regime, held_days)`，在撮合和结算之后调用：
+  1. 离场：持有满 max_days 个交易日，或出现出货迹象 → 下一交易日开盘市价卖。
+  2. 止盈：有目标价的持仓挂止盈条件单（止损单先挂，同一天两个都碰到时按止损算）。
+  3. 开新仓：空位 = 最多持仓数 − 当前持仓 − 挂着的买单。
+     - 跳过：已持有、已挂单、处于出货或下跌阶段的股票。
+     - 止损用 `sizing.suggest_stop`，股数用 `sizing.position_size`。
+     - 大盘仓位上限 `risk.regime_caps[regime]`，超过就停止开仓。
+     - 先建交易计划，再挂次日买单（`source="strategy"`）。
+- `backtest.py`：
+  - `simulate(spec, days, cands, book, regimes, settings, capital)`：在 `ledger.isolated()` 内存账本里逐日执行 `service.paper_eod` → `engine.settle_day` → `strategy_step`，和模拟跟踪是同一套代码。
+  - `run(template, params, seeds=5, base=None)`：
+    - 前 260 个交易日只热身。
+    - 选择期和留出期各从全新账户开始，每段跑 1 次策略和 5 次随机对照。
+    - 统计：年化、回撤、夏普、平均仓位、交易（胜率、平均 R、盈亏比）；每日超额的 t = min(普通 t, NW t，lag 10)。
+    - `verdict`：留出期不足 60 天 → short；超额 > 0 且 t ≥ 2 且选择期超额 > 0 → good；否则 weak 或 bad。
+  - 结果的 key 由 spec、boards 和模型 id 决定。
+- `follow.py`：
+  - `run_daily(day)`：对开启了模拟跟踪或实盘建议的策略：
+    - 行情取最近 90 天，选股表取最近 500 天，得到当天候选。
+    - 模拟跟踪：在它自己的模拟账户（"策略跟踪：名字"）里执行 `strategy_step`；持有天数按交易日历计算。
+    - 实盘建议：前 5 名附建议止损、股数、目标，存 `latest/{id}.json`。
+  - `live_candidates()` 并入 `nightly.candidates()`。
+- `store.py`：`workspace/strategy/strategies.json`（id 形如 `st_xxxxxxxx`，有 template、params、name、follow{enabled, account_id}、live、backtest_key）、`backtests/{key}.json`、`latest/{id}.json`。
+- 任务（HEAVY 组）：`strategy_backtest`（params 为 template、params、item_id；结果存盘并写回 backtest_key）、`strategy_follow`。每日流水线在交易日终之后、明日计划之前增加一步 strategies。
+- 接口 `api/routes/strategy.py`：
+  - GET `/api/strategy`：模板、选项、我的策略（附回测结论、模拟账户收益、最近的建议）。
+  - POST `/api/strategy/items {template, params, name, item_id}`：新建或修改；DELETE `/api/strategy/items/{id}`。
+  - POST `/api/strategy/backtest {template, params, item_id, force}`：参数没变时直接返回上次结果；模型策略没有启用的模型时返回 400。GET `/api/strategy/backtest/{key}`。
+  - POST `/api/strategy/items/{id}/follow {enabled}`（会建模拟账户）、POST `/api/strategy/items/{id}/live {enabled}`、POST `/api/strategy/run`。
+- 前端 `pages/strategy.js`（`#/strategy`，"策略"分组第一项）：
+  - 我的策略表格：回测结论，模拟跟踪和实盘建议的勾选，模拟账户收益。
+  - 模板列表，参数编辑。
+  - 诚实回测：结论；选择期和留出期的年化（策略 vs 随机的平均和范围）、超额、t、回撤、夏普、仓位、交易；曲线可切换时段。
+  - 最近的实盘建议。
+- 为此做的重构（行为不变，只加不改）：
+  - `ledger.isolated()`：当前线程临时换成内存账本，不拿全局锁、不碰真实账本。
+  - `service.plan_close / paper_eod`：从 `run_eod` 里抽出的共用核心。
+  - `screener.backtest.build_daily / pick_expr`：从方案回测里抽出的共用部分。
+  - `engine` 撮合 `ORDER BY created, rowid`。
+- 修正（一致性测试发现）：撮合循环开始时读到的委托，轮到它时先用 `_still_open` 重读状态。原先止损单成交平仓、撤掉同一持仓的止盈单之后，循环再撤一次会报错，整个日终都会失败。
+- 一致性测试 `test_backtest_equals_live_paper_pipeline`：同一组信号分别走 `simulate` 和真正的 `service.run_eod`（从日线读行情，时钟逐日推进，看不到未来）加 `strategy_step`，成交和每日资产完全相同。
+
+### 8.19 首页与指南整合（P8）
+- 组件 `qw-trade-summary`（components.js）：我的账户（总资产、收益）、明日计划（`/api/trading/nightly?latest_only=true`，只读已生成的：几只持仓要处理、几只候选、大盘仓位）、未读提醒，放在首页大盘环境卡片下面。
+- 首页"新手三步走"改成新的流程：看大盘环境和情绪 → 每天晚上看明日计划 → 先用模拟盘或策略模拟跟踪练，看复盘再决定用不用真钱。指南"每天怎么用"的链接直接打开交易页对应的标签（`?tab=nightly` / `?tab=review`）。
+
+### 8.20 实验室因子库与提速（P7 补充）
+- `modellab/factors_builtin.py`：
+  - `basic_features`（b_，34 个）和 `ta_features`（t_，38 个）：用 `indicators.funcs` 的分组向量化函数；价格和量纲类的输出都已标准化。
+  - `alpha158_features`（a158_，158 个；按股票分块）和 `alpha101_features`（a101_，82 个；vnpy 源码里注释掉的 19 个不算）：Alpha101 有截面运算，按日期分块，每块往前多取 260 个交易日（覆盖库里最长的 250 日窗口）。
+  - 实现：直接用 vnpy 自带、写死的表达式字符串和 `calculate_by_expression` 求值，不调用 `prepare_data`；结果按 (datetime, vt_symbol) join 回来。
+  - 另有 `feature_names`、`FEATURE_INFO`、`SKIPPED`（当前为空）。
+  - 已知的微小差异：个别用到 cs_rank 的因子遇到并列值时，名次取决于 vnpy 内部 join 的行顺序，所以分块计算和整块计算在不到 1% 的行上可能不同。这是 vnpy 自身的行为。
+- `modellab/fast_ts.py`：vnpy 用 rolling_map 和 Python 回调逐行计算的 8 个时序算子（ts_mean / ts_std / ts_rank / ts_argmax / ts_argmin / ts_quantile / ts_decay_linear / ts_product），这里改成 numpy 滑动窗口实现。
+  - 替换方式：`patched()` 只在求值期间替换模块属性，vnpy 的文件不改；可嵌套，线程安全。
+  - 语义与原版逐项对齐：
+    - 按当前行顺序在每只股票内部滚动；
+    - min_samples 规则；
+    - null 和 NaN 分开处理（arg_max/arg_min 跳过 NaN；quantile 把 NaN 排在最后，插值碰到 NaN 结果就是 NaN）；
+    - vnpy 的 decay_linear 权重是"越早的值权重越大"，照原版。
+  - `tests/test_quant_web_lab_fast_ts.py` 在 65 组参数（算子 × 窗口 1/3/5/20 × 有无 NaN，另含 null、并列值、比窗口还短的股票、股票交错排列）上对照 vnpy 原版，结果一致。
+  - 实测（本机合成数据）：Alpha158 每 100 万行从约 22 分钟降到约 0.6 分钟；Alpha101 从约 40 分钟降到约 2 分钟（含按日期分块的重复计算）。
+- 训练前估算按本机实测速度计算：
+  - 因子：`FACTOR_SETS[*].min_per_m`，单位为分钟 / 百万行。
+  - LightGBM：每轮每 100 万行 × 100 个因子约 0.0275 秒；其他模型乘以 `ModelSpec.speed`；按预设估算提前停止后的轮数 `ROUNDS_TYPICAL`（fast 150 / standard 400 / fine 800）。
+  - 内存：因子数 × 行数 × 4 字节 × 2.5，再加字段表和 Alpha 分块的峰值。
+  - 训练循环把每段的 numpy 数组建好后，先释放 DataFrame 再训练，以降低峰值。
