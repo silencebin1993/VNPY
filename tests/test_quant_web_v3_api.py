@@ -3,6 +3,7 @@ import json
 import sys
 import types
 import warnings
+from datetime import date
 from pathlib import Path
 
 import polars as pl
@@ -372,3 +373,33 @@ def test_formula_preview_scan_and_validate(client: TestClient, formula_env: pl.D
     again = client.post("/api/formula/validate", json={"text": "XG:C>REF(C,1);", "holds": [5]}).json()
     assert again["result"]["key"] == r["key"]                           # 相同公式+参数直接返回缓存结果
     assert client.get("/api/formula/result/zzzz").status_code == 404
+
+
+# ================================================================ 分析接口（诊断 / 大盘 / 板块）
+
+def test_analysis_endpoints(client: TestClient, formula_env: pl.DataFrame, monkeypatch: pytest.MonkeyPatch) -> None:
+    empty = pbase.ProviderRegistry()                                    # 不联网：资金流取不到时只是没有参考信息
+    monkeypatch.setattr(pbase, "_REGISTRY", empty)
+    rt = types.ModuleType("quant_web.market.realtime")
+
+    def quotes(codes):
+        raise ConnectionError("离线")
+
+    rt.quotes = quotes
+    rt.market_phase = lambda: "休市"
+    install_fake(monkeypatch, "realtime", rt)
+    uni = sys.modules["quant_web.market.universe"]
+    uni.load_universe = lambda: pl.DataFrame({"code": [f"60000{k}" for k in range(4)], "name": ["甲", "乙", "丙", "丁"],
+                                              "industry": ["银行"] * 4, "list_date": [date(2010, 1, 1)] * 4})
+    r = client.get("/api/stock/600000/diagnosis")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["stage"]["key"] in ("accumulation", "washout", "markup", "distribution", "decline", "unclear")
+    assert d["risk"]["level"] in ("red", "yellow", "green") and d["risk"]["items"]
+    assert any(i["level"] == "none" for i in d["risk"]["items"])          # 没有扩展数据的项目标"没有数据"
+    assert d["timeline"] and d["volume_price"]
+    g = client.get("/api/market/regime").json()
+    assert g["regime"] in ("strong", "neutral", "weak") and g["cap"] is not None
+    s = client.get("/api/market/sectors").json()
+    assert s["date"] and s["rows"] == []                                  # 每个行业至少 5 只股票才统计（这里只有 4 只）
+    assert client.get("/api/analysis/stage_stats").status_code == 404

@@ -547,3 +547,64 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
   - 左侧为公式列表（分组筛选、验证徽章）；右侧为说明、公式文本和操作按钮：今天选股、历史验证、复制成我的公式、写法说明抽屉。
   - 验证结果按持有天数分表显示选择期/留出期/全部，并附逐年超额柱图；试过的公式数达到 5 个时提醒注意过拟合（localStorage `qw-formula-tried`）。
   - 在个股上看信号：`qw-kline-pro` 用 markers 标出信号日；输出线按数值量级自动放到主图或副图。
+
+### 8.10 量价与主力分析 `quant_web/analysis/`（P4）
+- `features.compute(frame, chips=None, rps=True)`：逐日特征，只用当天及以前的数据。列名见 `FEATURE_DOC`。
+  - 放量类证据用 60 日均量衡量（滞涨：`V > 1.8 × MAV60`；破位：`V > 1.2 × MAV60`），避免连续巨量抬高 20 日均量后漏判。
+  - 高位：`pos_max20`（20 天内到过的最高位置）。
+  - RPS120 是按日期的截面百分位。
+- `stage.py`：
+  - 五个阶段：吸筹 / 洗盘 / 拉升 / 出货 / 下跌，另有"不明确"。每个阶段有前提 `PREREQ` 和带权重的证据 `EVIDENCE`；洗盘前提要求离 20 日高点至少 3%。
+  - 打分：得分 = 满足证据的权重 ÷ 有数据证据的权重（有数据的证据不到总权重一半时不打分）。胜出需要 ≥ `THRESHOLD`（0.6）；并列时按 `PRIORITY` 先报出货、下跌。
+  - 资金流、股东户数只作参考信息，不参与打分。规则事先定死，不调参。
+  - 函数：`classify(feat, keep_evidence)`、`explain_row(row)`。
+- `stage_stats.py`（历史验证，任务 `stage_stats`）：
+  - 全市场按股票分批，每批 700 只，逐日判断阶段（含筹码证据）。之后 5/10/20 天按真实规则（次日开盘买、扣成本）统计。超额按天平均，与 t 值用同一序列；t = min(daily_t, nw_t(lag=N))，并分选择期和留出期。
+  - 结果文件 `workspace/analysis/stage_stats.json`；`verdict(stage, res)` 生成一句话结论。全市场一次约 3.5 分钟，内存峰值约 7 GB。
+  - **实测（2026-09-25）**：拉升、吸筹、洗盘之后都没有跑赢同日所有股票（拉升在选择期显著跑输，A 股短期反转）；出货只在选择期跑输；下跌没有显著跑输。结论：主力阶段只是"看清量价的工具"，不能作为买入依据。页面按数据显示原文。
+- `diagnose.py`：`diagnose(code, rps, flow, holders)` 返回 `{stage(证据/得分/前提/历史结论), timeline(最近 120 天的阶段分段), volume_price(白话), reference, last_bar, note}`；`rps_recent(last)` 计算全市场最近一年的 RPS。
+- `riskscan.py`：
+  - `scan_stock(...)` 逐项给出红/黄/绿/没有数据。检查项：ST/退市、面值、市值、流动性、次新、亏损/净资产（按 avail_date 取已公布财报）、业绩预告、解禁、质押、减持、主力阶段、监管关键词（本地新闻）。缺数据的项标"没有数据"，不当作没风险。
+  - `scan_many(frame_last, today, fund)` 批量版，只做能批量计算的项目，返回 risk 和 risk_reasons。
+- `regime.py`（大盘环境）：
+  - 分项打分：指数趋势 ±2、20 日线 ±1、宽度 20/60、新高新低、成交额。≥3 为强势，≤−2 为弱势，其余为震荡。
+  - `summarize` 输出 history、stats（之后 20 天的均值、胜率、p10、跌超 5% 概率、std、NW t），以及由数据自动生成的 `insights`。
+  - **实测**：强势之后并不比震荡涨得多；弱势之后波动明显更大。因此默认 `risk.regime_caps = {strong .7, neutral .7, weak .4}`，只在弱势时降仓。
+- `market.py`：`daily_table()` 缓存全市场宽度表（`workspace/analysis/market_daily.parquet`，面板签名变化才重算）；`current_regime()` / `last_regime()`；`current_sectors()`。
+- `sectors.py`：按证监会行业（至少 5 只股票）统计 5/20/60 日中位涨幅、站上 20 日线的比例、成交额，以及强度（20 日和 60 日排名的平均）和龙头股。
+- 接口：GET `/api/stock/{code}/diagnosis`（阶段 + 排雷 + 参考信息）、GET `/api/market/regime?refresh=`、GET `/api/market/sectors`、GET `/api/analysis/stage_stats`（没有结果时 404）。任务：`stage_stats`、`regime_refresh`。
+- 前端：
+  - 组件 `qw-regime-card`（首页）、`qw-stage-card`、`qw-risk-card`（看盘页右栏顶部）。
+  - 页面 `pages/sectors.js`（`#/sectors`）。
+
+### 8.11 选股器 `quant_web/screener/` 与仓位 `trading/sizing.py`（P5）
+- `trading/sizing.py`：
+  - `suggest_stop(entry, atr, ma20, max_pct=.08, min_pct=.02)`：在"2 倍 ATR"与"20 日线下方 2%"中取更近者，不超过 max_pct，至少留 min_pct。
+  - `position_size(capital, entry, stop, risk_per_trade, max_single_pct, cash, lot)`：按风险整手计算，受单只上限和现金限制，买不起时给出中文说明。
+  - `lot_size(code)`：科创板 200 股，其余 100 股。
+- `schemes.py`：
+  - `FIELDS` 为可作条件的字段（`DISPLAY_SCALE` 用于显示换算），`OPS`（between 用于区间）。
+  - `TERMS` 为打分因子及方向；`SCORING` 为 momentum/mainforce/pullback/value/custom 五种打分方式（model 在 P7 接入）。
+  - `PRESETS` 为 5 个内置方案：trend_swing（推荐）、mainforce_follow、washout_dip、value_growth、breakout。
+  - `validate_scheme(s)`：补全默认值并校验，出错时抛中文 ValueError。
+- `engine.py`：`run(scheme, as_of, profile, risk, cache)` 按以下步骤选股。
+  1. 范围：板块默认取 profile.boards；排除 ST；上市满 60 天；成交额、价格区间。
+  2. 条件：公式（在公式表上计算，取最后一天）/ 字段 / 阶段，按全部满足或任一满足组合。
+  3. 排雷：scan_many，默认去掉红灯。
+  4. 打分：同日百分位加权。
+  5. 取前 N 名，给出建议止损和股数（按 profile.capital/risk_per_trade 与 risk.max_single_pct/default_stop_pct；前复权的 ATR 和 MA20 用 adj_factor 换回真实价），并附白话理由。
+  - 数据：最近约 420 个日历日（公式需要更长时自动加长）。筹码统计只算最后 30 天。同一天的中间结果放在 cache 里，第一次约 10 秒，之后很快。
+- `backtest.py`：
+  - 调仓与持有：每 rebalance（默认等于 hold=10）个交易日选前 N 只，次日开盘买，持有 N 天，收益用 `formula.validate.forward_returns` 计算。
+  - 基准与统计：基准是同日所有符合范围的股票。按调仓期序列计算 t，并分选择期和留出期；另算组合曲线、年化、最大回撤。
+  - 历史字段表：`load_or_build_history` 把全历史"特征 + 阶段"缓存在 `workspace/screener/history/table_{chips|nochips}.parquet`，按面板签名判断是否失效。
+  - 口径：财报用 join_asof 按 avail_date 对齐；排雷只用历史上可知的项目；用到筹码函数的公式不能做方案回测。
+- `store.py`：`workspace/screener/schemes.json`（我的方案）、`results/{方案}/{日期}.json`（保留 60 天）、`backtests/{key}.json`。
+- 接口：
+  - GET `/api/screener/schemes`：方案列表（含回测结论）、字段、打分方式、公式列表。
+  - POST `/api/screener/run {scheme_id|scheme}`：运行选股，传 scheme_id 时保存结果。
+  - POST/DELETE `/api/screener/schemes`。
+  - POST `/api/screener/backtest {scheme_id|scheme, hold, force}`：有缓存直接返回，否则启动任务 `screener_backtest`。
+  - GET `/api/screener/backtest/{key}`、GET `/api/screener/latest/{id}`。
+- 前端 `pages/screener.js`（`#/screener`，分组"选股"，手机底部 tab）：
+  - 左侧为方案列表；右侧依次是：大盘提示、条件编辑器（范围/条件/排雷/打分/数量）、结果表（阶段、排雷、止损/股数、理由、诊断、自选）、回测（曲线、选择期/留出期表）。

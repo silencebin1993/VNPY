@@ -144,7 +144,9 @@ class RiskSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     max_single_pct: float = Field(0.20, gt=0, le=1)         # 单只股票最多占总资金的比例
-    regime_caps: dict[str, float] = Field(default_factory=lambda: {"strong": 0.8, "neutral": 0.5, "weak": 0.2})
+    # 大盘环境 → 总仓位上限。历史验证（2026-09）：强势之后并不比震荡涨得多，弱势之后波动明显更大，
+    # 所以强势/震荡一样、只在弱势时降仓（控制大起大落的伤害），而不是"行情好就加仓"
+    regime_caps: dict[str, float] = Field(default_factory=lambda: {"strong": 0.7, "neutral": 0.7, "weak": 0.4})
     daily_loss_limit: float = Field(0.03, ge=0, le=0.2)     # 当天亏损达到总资金的这个比例，当天禁止再买（0 = 不启用）
     cooldown_losses: int = Field(3, ge=0, le=20)            # 连续亏几笔进入冷静期（0 = 不启用）
     cooldown_days: int = Field(2, ge=0, le=30)              # 冷静期几个交易日不能买入
@@ -159,7 +161,7 @@ class RiskSettings(BaseModel):
     @field_validator("regime_caps")
     @classmethod
     def _check_caps(cls, value: dict[str, float]) -> dict[str, float]:
-        out: dict[str, float] = {"strong": 0.8, "neutral": 0.5, "weak": 0.2}
+        out: dict[str, float] = {"strong": 0.7, "neutral": 0.7, "weak": 0.4}
         for k, v in value.items():
             if k not in out:
                 raise ValueError(f"不认识的大盘环境「{k}」（可选 strong/neutral/weak）")

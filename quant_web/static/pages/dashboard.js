@@ -284,6 +284,8 @@
           </div>
         </div>
 
+        <qw-regime-card/>
+
         <qw-card v-if="!s">
           <qw-empty icon="thermo" title="情绪数据还没准备好" :desc="panelEmpty ? '下载完全市场数据后，这里会显示情绪温度和关键数字。' : '可能是本地数据还没更新，点右上角“一键更新”试试。'"/>
         </qw-card>

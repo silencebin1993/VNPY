@@ -118,7 +118,8 @@ def _period_stats(sig: pl.DataFrame, hold: int) -> dict:
     return {
         "n": n, "days": daily.height, "start": str(done["date"].min()), "end": str(done["date"].max()),
         "mean": q("net"), "median": float(done["net"].median()), "win": float((done["net"] > 0).mean()),
-        "base": q("base"), "excess": q("excess"), "excess_win": float((done["excess"] > 0).mean()),
+        "base": q("base"), "excess": q("excess"), "excess_daily": float(daily["excess"].mean()),
+        "excess_win": float((done["excess"] > 0).mean()),
         "t": stats.rounded(t), "daily_t": stats.rounded(dt), "nw_t": stats.rounded(nwt),
         "best": float(done["net"].max()), "worst": float(done["net"].min()),
     }
@@ -132,7 +133,8 @@ def _verdict(hold_res: dict) -> dict:
         return {"key": "no_data", "text": "留出期（最近）没有足够的信号，无法判断", "credible": False}
     t: float | None = ho.get("t")
     ex: float = ho.get("excess") or 0.0
-    if t is not None and t >= 2 and ex > 0 and (sel.get("excess") or 0) > 0:
+    # 可信要同时满足：t ≥ 2、按笔平均和按天平均的超额都为正、选择期也为正（避免少数几天的大量信号造成假象）
+    if t is not None and t >= 2 and ex > 0 and (ho.get("excess_daily") or 0) > 0 and (sel.get("excess") or 0) > 0:
         return {"key": "good", "credible": True,
                 "text": f"最近一段（样本外）平均每笔比同日随便买多赚 {ex * 100:.2f}%，t 值 {t:.1f}，有一定可信度（仍不保证以后有效）"}
     if ex > 0:

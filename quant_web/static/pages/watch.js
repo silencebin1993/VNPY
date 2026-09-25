@@ -94,6 +94,14 @@
       const readList = (k, d) => {
         try { const v = JSON.parse(localStorage.getItem(k)); return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : d; } catch (e) { return d; }
       };
+      // 第三版：个股诊断（主力阶段 + 排雷）
+      const diag = ref(null);
+      const diagErr = ref("");
+      const diagLoading = ref(true);
+      const loadDiag = async () => {
+        try { diag.value = await api.get(`/api/stock/${code}/diagnosis`, null, { silent: true }); diagErr.value = ""; }
+        catch (e) { diagErr.value = e.detail || e.message; } finally { diagLoading.value = false; }
+      };
       const indMain = ref(readList("qw-ind-main", ["ma"]));
       const indSubs = ref(readList("qw-ind-subs", ["vol", "macd"]));
       const indCatalog = ref(QW.indCatalog || []);
@@ -202,7 +210,7 @@
         if (!userPicked.value && ["交易中", "午间休市"].includes(ph)) tab.value = "minute";
       });
       onMounted(() => {
-        loadQuote(); loadProfile(); ensureTab(tab.value); loadCatalog();
+        loadQuote(); loadProfile(); ensureTab(tab.value); loadCatalog(); loadDiag();
         if (tab.value !== "day") setTimeout(() => { if (!klines.day) loadKline("day"); }, 600);   // 筹码卡片需要日线
       });
       let pollN = 0;
@@ -211,7 +219,7 @@
         if (tab.value === "minute") loadMinute();
         if (tab.value === "minute5" && ++pollN % 6 === 0) loadMinute5();     // 五日分时 30 秒刷新一次
       }, 5000);
-      const offDone = bus.on("job-done", () => { loadQuote(); loadProfile(); if (!isMinuteTab(tab.value)) loadKline(tab.value); });
+      const offDone = bus.on("job-done", () => { loadQuote(); loadProfile(); loadDiag(); if (!isMinuteTab(tab.value)) loadKline(tab.value); });
       onBeforeUnmount(offDone);
 
       const q = computed(() => quote.value || {});
@@ -369,6 +377,7 @@
         pf, fin, val, concepts, conceptsOpen, errText, lhist, lhistSummary, flowOption, retryAll, loadKline, loadMinute, isNum,
         minute5, minute5Err, loadMinute5, fiveOpt, isOneWord, newsBoost, ONE_WORD_TIP: QW.ONE_WORD_TIP, pillText, pillTip, quoteWhen, plainReason, swingGate,
         indMain, indSubs, indCatalog, pickerOpen, showCost, dayChips, chipsText, CHIPS_HELP: QW.term ? QW.term("筹码分布") : "",
+        diag, diagErr, diagLoading, loadDiag,
       };
     },
     template: `<div>
@@ -470,6 +479,8 @@
         </div>
 
         <div class="stack">
+          <qw-stage-card class="o3" :diag="diag" :loading="diagLoading" :error="diagErr" @reload="loadDiag"/>
+          <qw-risk-card class="o3" :risk="diag && diag.risk" :loading="diagLoading"/>
           <qw-card class="o3" :title="pred && pred.kind === 'swing' ? 'AI波段评估' : pred ? 'AI涨停评估' : 'AI评估'" icon="sparkles" :help="HELP.ai" :loading="profileLoading" skeleton-height="260px">
             <template #extra><span v-if="pred" class="qw-tag">{{ KIND_LABEL[pred.kind] || pred.label || 'AI预测' }}</span></template>
             <template v-if="pred">

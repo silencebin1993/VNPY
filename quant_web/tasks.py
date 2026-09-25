@@ -98,4 +98,38 @@ def _formula_validate(params: dict, progress: Progress) -> Any:
     return {"key": key, "verdicts": {h: r["verdict"] for h, r in result["holds"].items()}}
 
 
+@task("stage_stats", "主力阶段历史验证", group=HEAVY,
+      description="对全市场历史逐日判断主力阶段，统计每个阶段之后 5/10/20 天的真实表现（和同日所有股票比，分样本内/样本外）")
+def _stage_stats(params: dict, progress: Progress) -> Any:
+    from .analysis import stage_stats
+
+    return stage_stats.run(use_chips=bool(params.get("use_chips", True)), progress=progress)
+
+
+@task("regime_refresh", "更新大盘环境", group=HEAVY, description="重新计算全市场宽度表和大盘环境")
+def _regime_refresh(params: dict, progress: Progress) -> Any:
+    from .analysis import market
+
+    progress(0.1, "正在计算全市场宽度……")
+    res: dict = market.current_regime(force=True)
+    return {"date": res["date"], "regime": res["label"]}
+
+
+@task("screener_backtest", "选股方案回测", group=HEAVY,
+      description="在全部历史上按方案定期选股（次日开盘买、持有 N 天），扣成本，和同日随机比，分样本内/样本外")
+def _screener_backtest(params: dict, progress: Progress) -> Any:
+    from . import settings as settings_mod
+    from .screener import backtest, schemes, store
+
+    sch: dict = schemes.validate_scheme(params["scheme"])
+    prof: dict = settings_mod.load().profile.model_dump()
+    p: dict = {"hold": int(params.get("hold") or 10), "rebalance": int(params.get("rebalance") or params.get("hold") or 10),
+               "use_chips": bool(params.get("use_chips", True)), "boards": params.get("boards") or sch["universe"]["boards"] or prof["boards"]}
+    res: dict = backtest.run(sch, hold=p["hold"], rebalance=p["rebalance"], profile=prof, use_chips=p["use_chips"], progress=progress)
+    key: str = store.backtest_key(sch, p)
+    res["params"] = p
+    store.save_backtest(key, res)
+    return {"key": key, "verdict": res["verdict"]}
+
+
 __all__ = ["EXT", "HEAVY", "TASKS", "TaskSpec", "formula_params", "job_name", "listing", "submit", "task"]
