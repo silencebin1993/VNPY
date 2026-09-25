@@ -41,9 +41,11 @@ def _mf_summary() -> dict | None:
 def _cached_backtest(spec: dict) -> dict | None:
     """同样的模板 + 参数以前回测过（不管是不是存成了"我的策略"）就直接用"""
     bt = mod("strategy.backtest")
-    boards = list(bt.settings_view()["profile"].get("boards") or ["main"])
+    sv = bt.settings_view()
+    boards = list(sv["profile"].get("boards") or ["main"])
+    capital = float(sv["profile"].get("capital") or 100_000)
     extra = (mod("modellab.store").enabled() or "") if spec["signal"]["type"] == "model" else ""
-    return mod("strategy.store").load_backtest(bt.key_of(spec, boards, extra))
+    return mod("strategy.store").load_backtest(bt.key_of(spec, boards, extra, capital, sv))
 
 
 def _item_view(item: dict, mf: dict | None = None) -> dict:
@@ -120,7 +122,8 @@ def strategy_backtest(
         bt = None
         if item_id:
             bt = st.load_backtest(st.get(item_id).get("backtest_key"))
-            if bt and bt.get("spec") != spec:
+            cap_now = float(mod("strategy.backtest").settings_view()["profile"].get("capital") or 100_000)
+            if bt and (bt.get("spec") != spec or float(bt.get("capital") or 0) != cap_now):
                 bt = None
         bt = bt or _cached_backtest(spec)
         if bt:

@@ -660,7 +660,7 @@ def _summarize(sim: _SimResult, capital: float, base_rate: float | None, hit_rat
     total_return: float = float(values[-1] / capital - 1)
     years: float = max(len(values) / ANNUAL_DAYS, 1e-9)
     cagr: float = (1 + total_return) ** (1 / years) - 1 if total_return > -1 else -1.0
-    std: float = float(daily.std()) if len(daily) > 1 else 0.0
+    std: float = float(daily.std(ddof=1)) if len(daily) > 1 else 0.0          # 和 t 值同一口径（样本标准差）
     sharpe: float | None = float(daily.mean() / std * math.sqrt(ANNUAL_DAYS)) if std > 0 else None
     cm: dict = _curve_metrics(curve, trades, capital)
 

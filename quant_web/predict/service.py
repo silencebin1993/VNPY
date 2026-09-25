@@ -625,7 +625,8 @@ def predict_latest(kind: str, settings: Any = None) -> dict:
     if summary and summary.get("stale"):
         out["warnings"].append(f"模型已经 {summary.get('age_days')} 天没有重新训练，建议到模型中心重新训练")
     today: datetime = _now()
-    if today.weekday() < 5 and today.hour * 60 + today.minute > 15 * 60 + 30 and ctx.dates[-1] < today.date():
+    from ..trading import calendar as tcal
+    if tcal.is_trading_day(today.date()) and today.hour * 60 + today.minute > 15 * 60 + 30 and ctx.dates[-1] < today.date():
         out["warnings"].append(f"数据最后一天是 {ctx.dates[-1]}，今天的收盘数据可能还没更新")
     missing: list[str] = [c for c in meta["feature_cols"] if c not in features.ALL_FEATURES]
     if missing:

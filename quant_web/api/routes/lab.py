@@ -76,8 +76,14 @@ def lab_delete(run_id: str) -> Any:
 
 
 @router.post("/api/lab/runs/{run_id}/enable")
-def lab_enable(run_id: str) -> Any:
-    return ok(mod("modellab.store").enable(run_id))
+def lab_enable(run_id: str, ack: Annotated[bool, Body(embed=True)] = False) -> Any:
+    """启用到选股器。留出期（样本外）没有显著优势的模型，必须明确确认（ack=true）才启用"""
+    st = mod("modellab.store")
+    run = st.get_run(run_id)
+    credible = bool(((run.get("evaluation") or {}).get("verdict") or {}).get("credible"))
+    if not credible and not ack:
+        raise HTTPException(400, "这个模型在留出期（样本外）没有显著优势：启用后选股器的“模型打分”可能和随便挑差不多。确定要启用，请在页面上确认")
+    return ok(st.enable(run_id))
 
 
 @router.post("/api/lab/disable")

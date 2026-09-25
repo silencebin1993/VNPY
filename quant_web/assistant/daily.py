@@ -45,12 +45,13 @@ def _flow_codes(limit: int) -> list[str]:
 
 
 def run(progress: Callable[[float, str], None] | None = None, day: date | None = None) -> dict:
+    from .. import config
     from .. import settings as settings_mod
     from ..market import history
 
     say = progress or (lambda f, m: None)
     s = settings_mod.load()
-    out: dict = {"started": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    out: dict = {"started": datetime.now(config.CHINA_TZ).strftime("%Y-%m-%d %H:%M")}
     if not s.assistant.enabled:
         return {**out, "skipped": "投资助手每日流水线已在设置里关闭"}
     day = day or history.last_date()
@@ -136,13 +137,27 @@ def run(progress: Callable[[float, str], None] | None = None, day: date | None =
         n = nightly.build(day)
         acts = [a for acc in n["accounts"] for a in acc["positions"] if a["action"] != "继续持有"]
         lines: list[str] = []
+        # 先说数据和名单能不能用：前面哪一步失败了、日线是否最新完整、量化选股名单是否按最新数据打的分
+        try:
+            from ..multifactor import service as mf
+            hc = mf.health()
+        except Exception as e:  # noqa: BLE001
+            hc = {"ok": False, "items": [{"level": "bad", "text": f"自检没能完成：{e}"}]}
+        bad = [i["text"] for i in hc.get("items", []) if i["level"] == "bad"]
+        errs = list(out.get("errors") or [])
+        if bad or errs:
+            lines.append("⚠ 今晚的数据或名单有问题，先别按清单下单：" + "；".join(bad + [f"这一步没跑成功：{x}" for x in errs]))
+        mfr = n.get("mf_rebalance")
+        if mfr and not bad:
+            lines.append(f"量化选股调仓日：明天开盘卖出 {len(mfr['sells'])} 只、买入 {len(mfr['buys'])} 只（股数在量化选股页的下单清单）")
         if n.get("regime"):
-            lines.append(f"大盘环境：{n['regime']['label']}，建议总仓位不超过 {int((n['regime']['cap'] or 0) * 100)}%")
+            lines.append(f"大盘环境：{n['regime']['label']}（你设置的仓位上限 {int((n['regime']['cap'] or 0) * 100)}%；这是控制波动的经验规则，不是涨跌预测）")
         lines += [f"{a['name'] or a['code']}：{a['action']}（{'；'.join(a['reasons'])}）" for a in acts]
         if n["candidates"]:
-            lines.append("候选：" + "、".join(f"{c['name']}" for c in n["candidates"][:5]) + "（需要你确认才会下单）")
-        notify.send(f"明日计划（{n['date']}）", "\n".join(lines) or "没有需要处理的持仓。", level="warn" if acts else "info", kind="nightly")
-        return {"actions": len(acts), "candidates": len(n["candidates"])}
+            lines.append("选股器候选（历史回测没有跑赢随机，只供参考）：" + "、".join(f"{c['name']}" for c in n["candidates"][:5]))
+        level = "urgent" if (bad or errs) else "warn" if acts or mfr else "info"
+        notify.send(f"明日计划（{n['date']}）", "\n".join(lines) or "没有需要处理的持仓。", level=level, kind="nightly")
+        return {"actions": len(acts), "candidates": len(n["candidates"]), "health_ok": not bad, "errors": len(errs)}
     _step(out, "nightly", plan)
     say(1.0, "投资助手：完成")
     return out

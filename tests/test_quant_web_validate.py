@@ -44,6 +44,20 @@ def test_forward_returns_costs_limit_up_and_delayed_exit() -> None:
     assert r3["exit_date"] == fr3["date"][73] and r3["net"] == pytest.approx(9.5 / 10.0 * f - 1)
 
 
+def test_forward_returns_books_delisting_at_last_close() -> None:
+    """持有期间退市（之后没有行情）：按最后收盘价算亏损，不能当成"还没结束"丢掉"""
+    a = frame_from([10.0] * 72 + [10.0, 8.0, 6.0], code="600999")            # 第 74 天之后就没有行情了（退市）
+    b = frame_from([10.0] * 80, code="600888")                             # 另一只正常交易到第 79 天
+    fr = validate.add_trade_columns(pl.concat([a, b]).sort(["code", "date"]))
+    out = validate.forward_returns(fr, 5, costs_mod.DEFAULT, delisted={"600999"})
+    r = out.filter((pl.col("code") == "600999") & (pl.col("date") == a["date"][72])).row(0, named=True)
+    f = (1 - 0.001) * (1 - 0.00025 - 0.0005) / ((1 + 0.001) * (1 + 0.00025))
+    assert r["filled"] and r["exit_date"] == a["date"][74] and r["net"] == pytest.approx(6.0 / 8.0 * f - 1)
+    # 没退市、只是数据到头了（还在持有期）：仍然是"没结束"
+    out2 = validate.forward_returns(fr, 5, costs_mod.DEFAULT, delisted=set())
+    assert out2.filter((pl.col("code") == "600999") & (pl.col("date") == a["date"][72]))["net"][0] is None
+
+
 def planted(n_codes: int = 30, n_days: int = 700, seed: int = 1, edge: float = 0.01) -> pl.DataFrame:
     """在随机游走里埋一个规律：某天大涨超过 6% 后，接下来 5 天每天多涨 edge"""
     rng = np.random.default_rng(seed)

@@ -26,7 +26,7 @@
     const parts = [];
     parts.push(`今天市场情绪「${s.label || "—"}」${t != null ? `（${t}分）` : ""}`);
     parts.push(`${s.n_limit_up ?? "—"} 家涨停、${s.n_limit_down ?? "—"} 家跌停`);
-    if (isNum(brk)) parts.push(`炸板率 ${fmt.ratio(brk, 0)}，${brk < 0.2 ? "封板很牢" : brk < 0.35 ? "封板一般" : "封板不稳，追高容易被套"}`);
+    if (isNum(brk)) parts.push(`炸板率 ${fmt.ratio(brk, 0)}，${brk < 0.2 ? "封板很牢" : brk < 0.35 ? "封板一般" : "封板不稳"}`);
     if (isNum(s.max_streak)) parts.push(`最高 ${s.max_streak} 连板`);
     let sent = parts.join("，") + "。";
     if (isNum(prem)) {
@@ -34,8 +34,8 @@
       else if (prem > 0) sent += `昨天涨停的股票今天平均小涨 ${fmt.ratio(prem, 1)}，接力赚钱效应一般。`;
       else sent += `昨天涨停的股票今天平均跌了 ${fmt.ratio(Math.abs(prem), 1)}，追涨的人在亏钱。`;
     }
-    const advice = { 冰点: "情绪冰冷，适合多看少动。", 低迷: "情绪偏弱，少动手、别追高。", 正常: "情绪平稳，保持平常心。", 活跃: "赚钱效应不错，但别盲目追高。", 过热: "情绪过热，小心随时降温回落。" };
-    return sent + (advice[s.label] || "");
+    // 情绪指标只描述涨停、连板的热度，没有做过“能不能预测之后涨跌”的验证，所以这里不给操作建议
+    return sent + "（情绪只反映短线热度，没有验证过能预测之后的涨跌；中长期选股看“量化选股”。）";
   }
 
   function smallLine(c, dates, values, color, yfmt, name, extra) {

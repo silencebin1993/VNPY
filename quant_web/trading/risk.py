@@ -62,8 +62,9 @@ def check(conn: sqlite3.Connection, account: dict, req: OrderRequest, ctx: dict)
         if not live.get("enabled"):
             items.append(_item("block", "live_off", "实盘总开关是关着的（在“交易 → 设置”里打开后才能用真钱下单）"))
         cap = float(live.get("max_order_amount") or 0)
-        if cap and px and px * req.qty > cap:
-            items.append(_item("block", "live_amount", f"单笔金额 {px * req.qty:,.0f} 元超过了实盘单笔上限 {cap:,.0f} 元"))
+        if cap and px and px * req.qty > cap:                  # 买入超过上限禁止；卖出只提醒（不能因为上限卖不掉自己的持仓）
+            items.append(_item("block" if req.side == "buy" else "confirm", "live_amount",
+                               f"单笔金额 {px * req.qty:,.0f} 元超过了实盘单笔上限 {cap:,.0f} 元"))
     # ---------------- 价格
     if req.kind == "limit" and px:
         lu, ld = q.get("limit_up"), q.get("limit_down")
@@ -109,18 +110,31 @@ def check(conn: sqlite3.Connection, account: dict, req: OrderRequest, ctx: dict)
             if cap_total is not None and equity:
                 after: float = (snap["market_value"] + amount) / equity
                 if after > float(cap_total) + 1e-6:
-                    items.append(_item("confirm", "regime_cap", f"买完后总仓位 {after * 100:.0f}%，超过了当前大盘环境建议的上限 {float(cap_total) * 100:.0f}%"))
+                    items.append(_item("confirm", "regime_cap", f"买完后总仓位 {after * 100:.0f}%，超过了你设置的大盘环境仓位上限 {float(cap_total) * 100:.0f}%"
+                                                                "（这是控制波动的经验规则，不是涨跌预测；量化选股组合按大盘减仓在回测里反而更差）"))
         pct = q.get("pct")
         if pct is not None and pct >= float(rk.get("chase_warn_pct") or 5):
             items.append(_item("confirm", "chase", f"这只股票今天已经涨了 {pct:.1f}%：追高买入很容易买在短期高点"))
         if q.get("limit_up") and q.get("price") and q["price"] >= q["limit_up"] - 0.005:
             items.append(_item("warn", "at_limit_up", "现在是涨停价：排队也很可能买不到，第二天低开的风险也大"))
+        # 主力阶段：历史上"拉升"（−0.43%/周，t −4.2）和"出货"（−0.18%/周，t −2.9）之后一周平均跑输同池，买之前提醒一次；
+        # "下跌"之后一周并不比平均差（量化选股的持仓里三成是"下跌"，照样跑赢），不再拦。block_distribution=False 时不提醒
         stg = ctx.get("stage")
-        if stg in ("distribution", "decline"):
-            lvl = "block" if rk.get("block_distribution", True) else "confirm"
-            items.append(_item(lvl, "stage", "主力阶段判断为“疑似出货”，不要买" if stg == "distribution" else "主力阶段判断为“下跌趋势”，不要抄底"))
+        if stg in ("distribution", "markup") and rk.get("block_distribution", True):
+            items.append(_item("confirm", "stage", ("主力阶段判断为“疑似出货”" if stg == "distribution" else "主力阶段判断为“拉升”")
+                               + "：历史上这类股票之后一周平均跑输其他股票（不是一定会跌）。确定要买？"))
+        # 排雷：硬伤（退市 / ST / 面值和市值退市线 / 资不抵债 / 成交极冷 / 监管处罚）红灯直接禁止；其余红灯只要求确认
         if ctx.get("risk_level") == "red":
-            items.append(_item("block" if rk.get("block_risk_red", True) else "confirm", "risk_red", "排雷体检是红灯（有明显风险），不要买"))
+            titles = "、".join(ctx.get("risk_titles") or []) or "有明显风险"
+            if ctx.get("risk_hard"):
+                items.append(_item("block" if rk.get("block_risk_red", True) else "confirm", "risk_red", f"排雷硬伤：{titles}，不要买"))
+            else:
+                items.append(_item("confirm", "risk_red", f"排雷红灯：{titles}（这类提示没有证明能预测下跌；量化选股的历史持仓里亏损股并不比盈利股差）。确定要买？"))
+        floor = float(rk.get("min_amount_20d") or 0)
+        amt20 = ctx.get("amt20")
+        if floor and amt20 is not None and amt20 < floor:
+            items.append(_item("confirm", "liquidity", f"20 日平均每天只成交约 {amt20 / 1e4:,.0f} 万元，低于你设的下限 {floor / 1e4:,.0f} 万元："
+                                                      "买卖量大时不容易成交、价格冲击大。确定要买？"))
         if pos and rk.get("warn_average_down", True) and q.get("price") and q["price"] < pos["cost"] * 0.97:
             items.append(_item("confirm", "average_down", f"你已经持有这只股票而且在亏（成本 {pos['cost']:.2f}），越跌越买是新手亏大钱最常见的方式"))
         limit = float(rk.get("daily_loss_limit") or 0)

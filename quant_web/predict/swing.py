@@ -31,7 +31,7 @@ from . import features, labels, model, stats
 KIND: str = "swing"
 LABEL: str = "net"
 SELECTION_START: date = date(2022, 1, 1)
-HOLDOUT_START: date = date(2025, 7, 1)
+HOLDOUT_START: date = date(2025, 7, 1)          # 必须和 predict.backtest.HOLDOUT_START 一致（测试里检查）
 EVAL_TOP_N: int = 5
 EVAL_THRESHOLD: float = 0.01
 EVAL_BOARDS: tuple[str, ...] = ("main",)

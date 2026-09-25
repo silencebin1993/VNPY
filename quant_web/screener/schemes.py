@@ -100,7 +100,7 @@ STAGES: dict[str, str] = {"accumulation": "吸筹", "washout": "洗盘", "markup
 PRESETS: list[dict] = [
     {
         "id": "reversal_value", "name": "反转 + 低估值 + 低换手", "builtin": True,
-        "desc": "按学术研究里 A 股较稳定的规律事先定好的方案（没有用我们的数据调参）：盈利的公司里，最近跌得多、估值低、换手低、市值偏小的排前面；排除出货阶段和排雷红黄灯。是否有用以回测为准。",
+        "desc": "按学术研究里 A 股较稳定的规律事先定好的方案（没有用我们的数据调参）：盈利的公司里，最近跌得多、估值低、换手低、市值偏小的排前面；排除出货阶段和排雷红黄灯。历史回测：收益和随机差不多、回撤小一些，没有显著跑赢随机。",
         "universe": {"boards": None, "exclude_st": True, "min_amount": 3e7, "price_min": 2, "price_max": 1000},
         "conditions": [
             {"type": "field", "field": "pe_ttm", "op": "between", "value": [0, 40]},
@@ -146,7 +146,7 @@ PRESETS: list[dict] = [
     },
     {
         "id": "value_growth", "name": "价值成长 + 趋势", "builtin": True,
-        "desc": "市盈率 0~30 倍、ROE 不低于 8%、利润同比增长超过 10%，并且股价在年线之上（不接下跌中的“便宜货”）。",
+        "desc": "市盈率 0~30 倍、ROE 不低于 8%、利润同比增长超过 10%，并且股价在年线之上（不接下跌中的“便宜货”）。注意：历史回测没有跑赢随机，只作观察。",
         "universe": {"boards": None, "exclude_st": True, "min_amount": 3e7, "price_min": 2, "price_max": 1000},
         "conditions": [
             {"type": "field", "field": "pe_ttm", "op": "between", "value": [0, 30]},

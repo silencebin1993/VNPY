@@ -382,19 +382,30 @@ def test_easytrader_failure_rejects_order_and_alerts(ws: Path, monkeypatch: pyte
     def boom(code, price, amount):
         raise RuntimeError("下单窗口没有弹出（同花顺被切到后台）")
 
+    # 发送时出错：券商那边可能已经收到了——不能当成"被拒绝"（否则再下一次就可能变成两笔），保持已提交并紧急提醒去核对
     user.buy = boom
     with ledger.connect() as c:
         order = b.place(c, OrderRequest("600000", "buy", 1000, "limit", 10.0), ref_price=10.0)
-        assert order["status"] == "rejected" and "券商下单失败" in order["message"]
+        assert order["status"] == "submitted" and "结果不确定" in order["message"]
         alerts = ledger.rows(c, "SELECT * FROM alerts WHERE account_id=?", (b.account["id"],))
-        assert len(alerts) == 1 and alerts[0]["level"] == "urgent" and alerts[0]["kind"] == "broker"
+        assert len(alerts) == 1 and alerts[0]["level"] == "urgent" and alerts[0]["kind"] == "broker" and "重复下单" in alerts[0]["title"]
 
-    # entrust_no 拿不到（字典里没有这个键）也算失败
+    # entrust_no 拿不到（字典里没有这个键）：同样不确定
     b2, user2 = easytrader_client(monkeypatch)
     user2.buy = lambda code, price, amount: {"其他字段": "1"}
     with ledger.connect() as c:
         order2 = b2.place(c, OrderRequest("600000", "buy", 1000, "limit", 10.0), ref_price=10.0)
-        assert order2["status"] == "rejected"
+        assert order2["status"] == "submitted" and "结果不确定" in order2["message"]
+
+    # 还没发出去就出错（连不上客户端）：确定没有下单 → 拒绝
+    b3, _ = easytrader_client(monkeypatch)
+
+    def no_client():
+        raise RuntimeError("连不上同花顺")
+    b3._client = no_client
+    with ledger.connect() as c:
+        order3 = b3.place(c, OrderRequest("600000", "buy", 1000, "limit", 10.0), ref_price=10.0)
+        assert order3["status"] == "rejected" and "券商下单失败" in order3["message"]
 
 
 def test_easytrader_sync_dedups_and_books_untracked_trade(ws: Path, monkeypatch: pytest.MonkeyPatch) -> None:

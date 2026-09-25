@@ -37,8 +37,9 @@ def latest_prices() -> tuple[str | None, dict[str, float], dict[str, str]]:
 
 
 def mf_step(conn, account_id: str, day: date, next_day: date, price_of: Callable[[str], float | None],
-            name_of: Callable[[str], str] | None = None) -> dict:
-    """在模拟账户里向最近一期组合靠拢：卖出组合外的持仓，等权买入组合内还没有的股票（都挂下一个交易日开盘）"""
+            name_of: Callable[[str], str] | None = None, allow_buys: bool = True) -> dict:
+    """在模拟账户里向最近一期组合靠拢：卖出组合外的持仓，等权买入组合内还没有的股票（都挂下一个交易日开盘）。
+    allow_buys=False（价格太旧）时只卖不买"""
     rec: dict | None = official_target()
     out: dict = {"sells": 0, "buys": 0, "skipped": [], "target_date": rec["date"] if rec else None}
     if not rec or not rec.get("holdings") or rec["date"] > str(day):
@@ -69,6 +70,9 @@ def mf_step(conn, account_id: str, day: date, next_day: date, price_of: Callable
     # 真正的资金约束是上面的 budget（按收盘价算）和撮合时的现金核对；市价买单按参考价上浮 10% 冻结，
     # 所以给下单检查的"可以先用的钱"放宽到 budget 的 1.1 倍，免得冻结口径把本来买得起的单挡掉
     credit: float = 1.1 * max(budget, 0.0)
+    if not allow_buys:
+        out["skipped"].append("量化选股的最新打分太旧（最近一天没打分成功）：今天只卖不买，等打分更新后再补买")
+        return out
     for rank, code in enumerate(target, start=1):
         if code in held or code in buying:
             continue

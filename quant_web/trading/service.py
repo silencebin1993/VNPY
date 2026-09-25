@@ -76,11 +76,22 @@ def _ctx(account: dict, code: str, with_diag: bool = True) -> dict:
         ctx["quote"] = {}
         ctx["quote_error"] = str(e)
     if with_diag:
+        try:                                                # 20 日平均成交额（流动性下限检查用）
+            from ..market import history
+            last = history.last_date()
+            if last is not None:
+                a = history.load_panel(codes=[code], start=last - timedelta(days=45), columns=["amount"]).sort("date").tail(20)
+                if a.height >= 5:
+                    ctx["amt20"] = float(a["amount"].mean())
+        except Exception:  # noqa: BLE001  取不到就跳过这项检查
+            pass
         try:
             from ..analysis import diagnose
             d = diagnose.full(code)
             ctx["stage"] = d["stage"]["key"]
             ctx["risk_level"] = d["risk"]["level"]
+            ctx["risk_hard"] = bool(d["risk"].get("hard"))
+            ctx["risk_titles"] = d["risk"].get("hard_titles") if d["risk"].get("hard") else d["risk"].get("red_titles") or []
             ctx["diag_name"] = d.get("name")
         except Exception as e:  # noqa: BLE001  诊断失败时相关检查跳过（页面会说明）
             ctx["diag_error"] = str(e)
@@ -389,9 +400,22 @@ def _live_intraday(conn, acc: dict, s: dict, quotes: dict[str, dict], today: dat
                 msg = f"{p.get('name') or p['code']} 跌破止损价 {p['stop']:.2f}：处理出错（{e}），请立即手动卖出"
             out["alerts"] += 1
             _urgent(conn, acc, p["code"], "stop_hit", "跌破止损", msg)
+    # 过了交易日还在排队的委托（那天程序没开或实盘开关关着）：作废并提醒，绝不补发——价格和情况都变了
+    for o in ledger.rows(conn, "SELECT * FROM orders WHERE account_id=? AND status='queued' AND trade_date<?", (acc["id"], today.isoformat())):
+        engine.cancel(conn, o["id"], "expired", f"排队到 {o['trade_date']} 开盘提交，但那天没有提交出去，已作废")
+        _urgent(conn, acc, o["code"], "order_rejected", "排队的委托已作废",
+                f"{o.get('name') or o['code']} {'买入' if o['side'] == 'buy' else '卖出'} {o['qty']} 股：原定 {o['trade_date']} 开盘提交，"
+                "那天没有提交出去（程序没开或实盘开关关着），已作废。需要的话请重新下单。")
     if live_on and broker.can_auto:
-        for o in ledger.rows(conn, "SELECT * FROM orders WHERE account_id=? AND status='queued'", (acc["id"],)):
+        cap: float = float(s["live"].get("max_order_amount") or 0)
+        for o in ledger.rows(conn, "SELECT * FROM orders WHERE account_id=? AND status='queued' AND trade_date=?", (acc["id"], today.isoformat())):
             q = quotes.get(o["code"]) or {}
+            ref = o["price"] or q.get("price")
+            if cap and o["side"] == "buy" and ref and ref * o["qty"] > cap:          # 开盘价跳高后超过单笔上限：不提交
+                engine.cancel(conn, o["id"], "cancelled", f"按开盘价约 {ref * o['qty']:,.0f} 元，超过实盘单笔上限 {cap:,.0f} 元")
+                _urgent(conn, acc, o["code"], "order_rejected", "排队的委托没有提交",
+                        f"{o.get('name') or o['code']} 按现在的价格约 {ref * o['qty']:,.0f} 元，超过了实盘单笔上限 {cap:,.0f} 元，没有提交。")
+                continue
             req = OrderRequest(o["code"], o["side"], o["qty"], o["kind"], o["price"], o["trigger"], o["valid"], o.get("name"),
                                o.get("reason") or "", o.get("plan_id"), "queued")
             engine.cancel(conn, o["id"], "cancelled", "开盘后已转成正式委托")

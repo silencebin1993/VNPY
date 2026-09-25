@@ -19,12 +19,24 @@ REG_WORDS: tuple[str, ...] = ("立案", "调查", "问询函", "警示函", "处
 
 
 def item(key: str, title: str, level: str, detail: str, when: str | None = None) -> dict:
-    return {"key": key, "title": title, "level": level, "level_text": LEVEL_TEXT[level], "detail": detail, "date": when}
+    text = LEVEL_TEXT[level] if not (level == "red" and key not in HARD_KEYS) else "风险提示"     # 软风险的红灯不说"建议回避"
+    return {"key": key, "title": title, "level": level, "level_text": text, "detail": detail, "date": when}
+
+
+# "硬"风险：退市 / ST / 面值和市值退市线 / 资不抵债 / 成交极冷卖不掉 / 监管立案处罚——这些是规则层面的硬伤，红灯时交易页直接禁止买入。
+# 其余（亏损、业绩预告、解禁、质押、减持、主力阶段、次新）是"软"提示：红灯只要求你确认。
+# 依据：量化选股样本外持仓里，近四季亏损的股票下一周超额 +0.70%/周，盈利的 +0.34%/周（同周配对差 +0.08%，t 0.4，没有显著差别）；
+# 选股时直接去掉亏损股，年化 22.1% → 20.1%、超额 13.9% → 12.2%——并不更好。
+HARD_KEYS: frozenset[str] = frozenset({"st", "par", "cap", "equity", "liq", "reg"})
 
 
 def overall(items: list[dict]) -> str:
     lv: int = max((LEVELS[i["level"]] for i in items), default=0)
     return {3: "red", 2: "yellow"}.get(lv, "green")
+
+
+def hard_red(items: list[dict]) -> list[dict]:
+    return [i for i in items if i["level"] == "red" and i["key"] in HARD_KEYS]
 
 
 def _ext(name: str) -> pl.DataFrame:
@@ -174,8 +186,12 @@ def scan_stock(code: str, name: str | None, today: date, last_bar: dict | None, 
             items.append(item("reg", "监管 / 违规消息", "red", "；".join(t for t, _ in hits[:3]), hits[0][1]))
         else:
             items.append(item("reg", "监管 / 违规消息", "green", "最近的新闻里没有立案、问询、处罚等字样"))
-    return {"level": overall(items), "level_text": LEVEL_TEXT[overall(items)], "items": items,
-            "note": "排雷只能发现公开数据里的明显风险，不能保证没有其他问题。"}
+    hard = hard_red(items)
+    lv = overall(items)
+    return {"level": lv, "level_text": "有风险提示" if lv == "red" and not hard else LEVEL_TEXT[lv], "items": items, "hard": bool(hard),
+            "hard_titles": [i["title"] for i in hard], "red_titles": [i["title"] for i in items if i["level"] == "red"],
+            "note": "排雷只能发现公开数据里的明显风险，不能保证没有其他问题。退市 / ST / 面值和市值退市线 / 资不抵债 / 成交极冷 / 监管处罚是硬伤；"
+                    "亏损、业绩预告、解禁、质押、减持这些红灯只是提示——量化选股的历史持仓里，亏损股下一周并不比盈利股差。"}
 
 
 def scan_many(frame_last: pl.DataFrame, today: date, fundamentals: pl.DataFrame | None = None) -> pl.DataFrame:
@@ -212,10 +228,13 @@ def scan_many(frame_last: pl.DataFrame, today: date, fundamentals: pl.DataFrame 
         add(pl.col("net_profit_ttm") < 0, "近四季亏损", "yellow")
     fc = _ext("forecast")
     if fc.height:
-        bad = (fc.filter((pl.col("notice_date") >= today - timedelta(days=120)) & pl.col("kind").is_in(list(BAD_FORECAST)))
-               .select("code").unique().with_columns(pl.lit(True).alias("_bad_fc")))
+        # 和单只诊断（scan_stock）同一个口径：首亏 / 预亏 / 续亏 / 增亏 红灯，预减 / 略减 黄灯
+        recent = fc.filter((pl.col("notice_date") >= today - timedelta(days=120)) & pl.col("kind").is_in(list(BAD_FORECAST)))
+        red_kinds = [k for k, v in BAD_FORECAST.items() if v == "red"]
+        bad = recent.group_by("code").agg(pl.col("kind").is_in(red_kinds).any().alias("_fc_red"), pl.lit(True).alias("_bad_fc"))
         df = df.join(bad, on="code", how="left")
-        add(pl.col("_bad_fc"), "业绩预告不佳", "yellow")
+        add(pl.col("_fc_red").fill_null(False), "业绩预告亏损", "red")
+        add(pl.col("_bad_fc").fill_null(False) & ~pl.col("_fc_red").fill_null(False), "业绩预告下降", "yellow")
     un = _ext("unlock")
     if un.height:
         u = (un.filter((pl.col("date") >= today) & (pl.col("date") <= today + timedelta(days=30)))

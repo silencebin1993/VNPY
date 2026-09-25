@@ -89,11 +89,13 @@ def run_daily(day: date | None = None, progress: Progress | None = None, *, base
             res: dict = {"id": item["id"], "name": item["name"]}
             try:
                 if (item.get("follow") or {}).get("enabled"):
+                    fresh = bool(px_date) and px_date >= str(tcal.prev_trading_day(day))     # 最多晚一个交易日
                     if px_date != str(day):
-                        res["note"] = f"量化选股最近一次打分是 {px_date}，不是 {day}：用那天的收盘价算股数"
+                        res["note"] = (f"量化选股最近一次打分是 {px_date}，不是 {day}：" +
+                                       ("用那天的收盘价算股数" if fresh else "价格太旧，今天只卖不买"))
                     aid = ensure_account(item, capital)
                     with ledger.connect() as conn:
-                        res["follow"] = mf_follow.mf_step(conn, aid, day, next_day, px.get, names.get)
+                        res["follow"] = mf_follow.mf_step(conn, aid, day, next_day, px.get, names.get, allow_buys=fresh)
                     store.update(item["id"], follow={**(store.get(item["id"]).get("follow") or {}), "enabled": True, "account_id": aid,
                                                      "target_date": res["follow"].get("target_date"), "last_run": str(day)})
             except Exception as e:  # noqa: BLE001

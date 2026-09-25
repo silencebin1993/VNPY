@@ -128,8 +128,16 @@ def verdict(segs: dict) -> dict:
             "text": f"留出期年化比同样规则的随机选股低 {abs(ex or 0) * 100:.1f}%：选股这一步没有帮上忙。" if ex is not None else "没有足够的数据"}
 
 
-def key_of(spec: dict, boards: list[str], extra: str = "") -> str:
-    raw = json.dumps({"spec": spec, "boards": boards, "extra": extra}, sort_keys=True, ensure_ascii=False, default=str)
+RISK_KEYS: tuple[str, ...] = ("risk_per_trade", "max_single_pct", "default_stop_pct", "regime_caps", "block_distribution")
+
+
+def key_of(spec: dict, boards: list[str], extra: str = "", capital: float | None = None, settings: dict | None = None) -> str:
+    """回测结果的缓存键：策略、板块、模型，以及会改变结果的资金和风控设置（改了资金或"一笔最多亏多少"就要重算）"""
+    s = settings or {}
+    risk = {k: (s.get("risk") or {}).get(k) for k in RISK_KEYS}
+    risk["risk_per_trade"] = (s.get("profile") or {}).get("risk_per_trade")
+    raw = json.dumps({"spec": spec, "boards": boards, "extra": extra, "capital": capital, "risk": risk},
+                     sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -172,7 +180,7 @@ def run(template_id: str, params: dict | None = None, progress: Progress | None 
         from ..modellab import store as lab
         extra = lab.enabled() or ""
     res: dict = {
-        "key": key_of(spec, boards, extra), "spec": spec, "boards": boards, "capital": capital, "seeds": seeds,
+        "key": key_of(spec, boards, extra, capital, settings), "spec": spec, "boards": boards, "capital": capital, "seeds": seeds,
         "holdout_start": str(HOLDOUT_START), "segments": segs, "verdict": verdict(segs),
         "data_start": str(days[0]), "data_end": str(days[-1]), "seconds": round(time.time() - t0, 1),
         "rules": "每天收盘后按信号挂第二天的单（开盘买，一字涨停买不进；或回踩 2% 的限价单），按“一笔最多亏总资金的比例”和技术止损算股数，"

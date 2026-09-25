@@ -4,11 +4,11 @@
    没改过条件的方案运行后后端会存下来，第一次打开时直接显示"上次运行的结果"。 */
 (function () {
   "use strict";
-  const { ref, computed, onMounted, nextTick } = Vue;
+  const { ref, computed, onMounted, nextTick, watch } = Vue;
   const { api, fmt, store, toast, jobs, isNum } = QW;
 
   const BOARD_OPTS = [["main", "沪深主板"], ["chinext", "创业板"], ["star", "科创板"], ["bj", "北交所"]];
-  const STAGE_TONE = { accumulation: "warn", washout: "warn", markup: "red", distribution: "green", decline: "green", unclear: "gray" };
+  const STAGE_TONE = { accumulation: "gray", washout: "gray", markup: "warn", distribution: "warn", decline: "gray", unclear: "gray" };   // 阶段只是形态描述：只把历史上之后偏弱的"拉升 / 出货"标黄
   const RISK_TAG = { red: ["red", "红灯"], yellow: ["warn", "注意"], green: ["green", "未发现"] };
   const clone = (x) => JSON.parse(JSON.stringify(x));
 
@@ -51,7 +51,9 @@
       const schemes = computed(() => (meta.value ? meta.value.schemes : []));
       const current = computed(() => schemes.value.find((s) => s.id === selId.value) || null);
       const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== snap.value);
-      const sigNow = computed(() => (draft.value ? JSON.stringify(draft.value) : ""));
+      // 结果 / 回测是按哪些条件算的：只看会影响选股的部分（改名字、另存为不算"条件改过了"）
+      const sigOf = (d) => JSON.stringify({ universe: d.universe, conditions: d.conditions, match: d.match, risk: d.risk, scoring: d.scoring, top_n: d.top_n });
+      const sigNow = computed(() => (draft.value ? sigOf(draft.value) : ""));
       const remember = () => {
         memo[selId.value] = { result: result.value, resultSig: resultSig.value, bt: bt.value, btSig: btSig.value, btJob: btJob.value, view: view.value };
       };
@@ -69,9 +71,9 @@
         runErr.value = "";
         const m = memo[s.id];
         result.value = m ? m.result : null;
-        resultSig.value = m ? m.resultSig : snap.value;
+        resultSig.value = m ? m.resultSig : sigOf(d);
         bt.value = m ? m.bt : null;
-        btSig.value = m ? m.btSig : snap.value;
+        btSig.value = m ? m.btSig : sigOf(d);
         btJob.value = m ? m.btJob || "" : "";
         view.value = m ? m.view : "result";
         if (!result.value && s.latest_date) loadLatest(s.id);
@@ -133,7 +135,7 @@
       const loadLatest = async (sid) => {
         try {
           const r = await api.get("/api/screener/latest/" + sid, null, { silent: true });
-          if (selId.value === sid) { if (!result.value) { result.value = r; resultSig.value = snap.value; } } else if (!(memo[sid] && memo[sid].result)) setMemo(sid, { result: r, resultSig: "" });
+          if (selId.value === sid) { if (!result.value) { result.value = r; resultSig.value = sigNow.value; } } else if (!(memo[sid] && memo[sid].result)) setMemo(sid, { result: r, resultSig: "" });
         } catch (e) { /* 还没运行过 */ }
       };
       const save = async () => {
@@ -154,7 +156,7 @@
         btLoading.value = true;
         try {
           const r = await api.get("/api/screener/backtest/" + key, null, { silent: true });
-          if (selId.value === sid) { bt.value = r; btSig.value = sig || snap.value; btJob.value = ""; } else setMemo(sid, { bt: r, btSig: sig || "", btJob: "" });
+          if (selId.value === sid) { bt.value = r; btSig.value = sig || sigNow.value; btJob.value = ""; } else setMemo(sid, { bt: r, btSig: sig || "", btJob: "" });
         } catch (e) { /* 还没有 */ } finally { btLoading.value = false; }
       };
       const backtest = async (force) => {
@@ -175,6 +177,10 @@
         } catch (e) { /* 已提示 */ }
       };
       const resultStale = computed(() => !!result.value && !!resultSig.value && resultSig.value !== sigNow.value);
+      // 回测是按到哪天的数据算的：离现在一个多月就提醒重算（留出期变长，结论可能会变）
+      const btAgeDays = computed(() => (bt.value && bt.value.data_end && store.dataDate
+        ? Math.round((new Date(store.dataDate) - new Date(bt.value.data_end)) / 86400000) : 0));
+      watch(() => props.query && props.query.id, (id) => { if (id && meta.value && id !== selId.value) pick(id); });
       const btStale = computed(() => !!bt.value && !!btSig.value && btSig.value !== sigNow.value);
       const viewTabs = computed(() => [
         { value: "result", label: "选股结果", icon: "listCheck", badge: result.value ? result.value.rows.length : null },
@@ -214,7 +220,7 @@
         store, fmt, meta, loading, err, schemes, selId, current, pick, draft, dirty, editOpen, fieldOpts, fieldInfo, dispVal, setVal, onOp,
         addCond, delCond, toggleIn, boardsOf, toggleBoard, noPerm, amtYi, scoringOpts, termOpts, setWeight, run, running, result, runErr,
         save, remove, bt, btJob, btLoading, backtest, btOption, pct, cls, addWatch, tradeLink, regime, BOARD_OPTS, STAGE_TONE, RISK_TAG, isNum,
-        view, viewTabs, outRef, resultStale, btStale,
+        view, viewTabs, outRef, resultStale, btStale, btAgeDays,
       };
     },
     template: `<div class="fm-layout">
@@ -233,7 +239,7 @@
 
       <div class="stack">
         <div v-if="regime" class="sc-regime" :class="'t-' + regime.tone"><qw-icon name="gauge" :size="16"/>
-          <span>大盘环境：<b>{{ regime.label }}</b>，建议总仓位不超过 <b>{{ $fmt.ratio(regime.cap, 0) }}</b>。{{ regime.advice }}</span></div>
+          <span>大盘环境：<b>{{ regime.label }}</b>，仓位上限（你设置的经验规则，不是涨跌预测）<b>{{ $fmt.ratio(regime.cap, 0) }}</b>。{{ regime.advice }}</span></div>
 
         <qw-card v-if="draft" :title="draft.name" icon="filter" :sub="dirty ? '（已修改，未保存）' : ''">
           <template #extra>
@@ -288,7 +294,7 @@
             </div>
             <div class="sc-sec"><b>打分排序</b>
               <select v-model="draft.scoring.scheme" class="qw-input sc-sel"><option v-for="o in scoringOpts" :key="o.value" :value="o.value">{{ o.label }}</option></select>
-              <span class="muted">{{ meta.scoring[draft.scoring.scheme] && meta.scoring[draft.scoring.scheme].desc }}</span>
+              <span class="muted">{{ meta.scoring[draft.scoring.scheme] && meta.scoring[draft.scoring.scheme].desc }}（这是打分思路，不代表有效：看“历史回测”的留出期结果再判断）</span>
               <div v-if="draft.scoring.scheme === 'custom'" class="sc-weights">
                 <label v-for="t in termOpts" :key="t.key"><span>{{ t.label }}<em class="muted">{{ t.dir > 0 ? '（越大越好）' : '（越小越好）' }}</em></span>
                   <input type="range" min="0" max="3" step="0.5" :value="(draft.scoring.weights || {})[t.key] || 0" @input="setWeight(t.key, $event.target.value)"><b class="num">{{ (draft.scoring.weights || {})[t.key] || 0 }}</b></label>
@@ -346,6 +352,7 @@
             <qw-job v-if="btJob" :job-id="btJob" title="选股方案回测"/>
             <qw-skeleton v-if="btLoading && !bt" :rows="4"/>
             <template v-else-if="bt">
+              <div v-if="btAgeDays > 30" class="gd-note warn" style="margin-bottom:8px"><qw-icon name="alert" :size="15"/><span>这份回测的数据只到 {{ bt.data_end }}，已经过去 {{ btAgeDays }} 天：点“重新回测”用最新数据算一遍，结论可能会变。</span></div>
               <div v-if="btStale" class="gd-note warn" style="margin-bottom:8px"><qw-icon name="alert" :size="15"/><span>条件改过了：下面是修改前的方案的回测，点“历史回测”回测修改后的条件。</span></div>
               <div class="sc-bt-hd">
                 <span class="muted">{{ bt.data_start }} ~ {{ bt.data_end }} · 每 {{ bt.rebalance }} 个交易日选一次，持有 {{ bt.hold }} 天</span>

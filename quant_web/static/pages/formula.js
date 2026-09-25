@@ -264,6 +264,8 @@
         <qw-card v-if="result" title="历史验证结果" icon="target" :sub="'数据 ' + result.data_start + ' ~ ' + result.data_end + ' · 验证于 ' + (result.saved_at || '')">
           <template #extra><button class="btn sm ghost" @click="doValidate(true)">重新验证</button></template>
           <div class="gd-note"><qw-icon name="info" :size="16"/><span>{{ HONEST }}</span></div>
+          <div v-if="result.data_end && store.dataDate && (new Date(store.dataDate) - new Date(result.data_end)) / 86400000 > 30" class="gd-note warn"><qw-icon name="alert" :size="16"/>
+            <span>这份验证的数据只到 {{ result.data_end }}，已经过去一个多月：点“重新验证”用最新数据算一遍，结论可能会变。</span></div>
           <div v-if="triedCount >= 5" class="gd-note warn"><qw-icon name="alert" :size="16"/><span>你已经验证过 {{ triedCount }} 个不同的公式。试得越多，越容易碰巧找到一个“看起来很好”的——以“留出期”（最近一段、没参与挑选）的成绩为准。</span></div>
           <div class="fm-holds"><div v-for="h in holds" :key="h" class="fm-hold">
             <div class="fm-hold-hd"><b>{{ HOLD_LABEL[h] || ('持有 ' + h + ' 天') }}</b>

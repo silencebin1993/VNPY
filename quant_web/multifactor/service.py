@@ -264,6 +264,64 @@ def run_daily(progress: Progress = None, refresh_valuation: bool = True) -> dict
     return {"date": out["date"], "scored": n_all, "rebalance_day": out["rebalance_day"], "seconds": out["seconds"]}
 
 
+def health(today: dict | None = None) -> dict:
+    """下单前自检：日线是不是更新到最新交易日、最新一天下载全不全、名单是不是按最新数据打的分、
+    组合里有没有停牌 / 现在是 ST 的股票。items 的 level：ok / warn（要注意）/ bad（今天不要按名单下单）"""
+    import polars as pl
+
+    from ..market import history, universe
+    from ..trading import calendar as tcal
+    today = today if today is not None else load_today()
+    items: list[dict] = []
+
+    def add(key: str, level: str, text: str) -> None:
+        items.append({"key": key, "level": level, "text": text})
+
+    now = tcal.china_now()
+    closed = tcal.is_trading_day(now.date()) and now.hour * 60 + now.minute >= history.CLOSE_MINUTE
+    expected: date = now.date() if closed else tcal.prev_trading_day(now.date())
+    data_date: date | None = history.last_date()
+    if data_date is None:
+        add("data", "bad", "本地还没有日线数据：先到“数据中心”下载。")
+        return {"ok": False, "items": items, "expected": str(expected), "data_date": None}
+    if data_date < expected:
+        add("data", "bad", f"日线只更新到 {data_date}，最新一个已收盘的交易日是 {expected}：先点右上角“一键更新”，更新完再看名单。")
+    else:
+        add("data", "ok", f"日线已更新到最新交易日 {data_date}。")
+    prev = tcal.prev_trading_day(data_date)
+    bars = history.load_panel(start=prev, end=data_date, columns=["close"])
+    bars = bars.filter(pl.col("code").str.starts_with("60") | pl.col("code").str.starts_with("00"))
+    n_last = int(bars.filter(pl.col("date") == data_date).height)
+    n_prev = int(bars.filter(pl.col("date") == prev).height)
+    if n_prev and n_last < 0.97 * n_prev:
+        add("coverage", "bad", f"{data_date} 只有 {n_last} 只主板股票有日线（前一个交易日 {n_prev} 只）：可能没下载全，名单可能不准。先点“一键更新”补齐。")
+    else:
+        add("coverage", "ok", f"{data_date} 主板 {n_last} 只股票有日线，下载完整。")
+    if not today:
+        add("score", "bad", "还没有量化选股的名单：点“重新打分”。")
+        return {"ok": False, "items": items, "expected": str(expected), "data_date": str(data_date)}
+    if today["date"] < str(data_date):
+        add("score", "bad", f"名单是按 {today['date']} 的数据打的分，日线已经更新到 {data_date}：点“重新打分”（约 1 分钟）再看。")
+    else:
+        add("score", "ok", f"名单按 {today['date']} 收盘数据打分（{today.get('generated_at', '')} 生成）。")
+    if tcal._days() is None:
+        add("calendar", "warn", "交易日历暂时取不到：按“周一到周五”估算，节假日前后的调仓日判断可能不准。")
+    target: list[str] = list(today.get("target") or [])
+    if len(target) != TOP_N:
+        add("size", "warn", f"组合只有 {len(target)} 只（应该是 {TOP_N} 只）：可买股票太少，结果会和回测差得比较多。")
+    held_today = set(bars.filter(pl.col("date") == data_date)["code"].to_list())
+    names = {r["code"]: r.get("name") or "" for r in today.get("rows") or []}
+    uni = universe.load_universe()
+    cur = dict(zip(uni["code"].to_list(), uni["name"].to_list(), strict=True)) if uni.height else {}
+    st_now = [c for c in target if any(k in (cur.get(c) or names.get(c) or "").upper() for k in ("ST", "退"))]
+    if st_now:
+        add("st", "bad", "现在名称带 ST / 退：" + "、".join(f"{cur.get(c) or names.get(c)}（{c}）" for c in st_now) + "——不要买，按规则换排名下一只。")
+    stopped = [c for c in target if c not in held_today] if today["date"] == str(data_date) else []
+    if stopped:
+        add("halt", "warn", "最新一天没有成交（停牌）：" + "、".join(f"{names.get(c) or c}" for c in stopped) + "——下个交易日可能买不进，买不进就跳过换下一只。")
+    return {"ok": not any(i["level"] == "bad" for i in items), "items": items, "expected": str(expected), "data_date": str(data_date)}
+
+
 def record_track(today: dict) -> None:
     """前向跟踪：每周最后一个交易日记下目标组合（记下后不再修改）"""
     track = load_track()
@@ -297,8 +355,10 @@ def track_performance() -> dict:
                     slippage=E.impact_slippage(p, capital, TOP_N))
     bench = E.forward_open_returns(p, sd).where(mask.reindex(sd).fillna(False)).mean(axis=1)
     periods = []
-    for d, r in bt.period_ret.items():
-        done = p.dates.get_indexer([d])[0] + 1 < len(p.dates)
+    order = list(sd)
+    for k, (d, r) in enumerate(bt.period_ret.items()):
+        # 一期在"下一条记录的次日开盘"卖出才算结束；最后一条记录永远是进行中（收益按最新收盘估算，每天都会变）
+        done = k + 1 < len(order) and p.dates.get_indexer([order[k + 1]])[0] + 1 < len(p.dates)
         periods.append({"date": str(d.date()), "ret": float(r), "bench": float(bench.get(d, np.nan)), "complete": bool(done)})
     return {"started": track.get("started"), "periods": periods, "records": len(recs)}
 
@@ -409,6 +469,26 @@ def stage_check(p: P.Panel, mask: pd.DataFrame, sd: pd.DatetimeIndex, fwd: pd.Da
             "drop_share": float(drop.sum() / sel_h.sum()) if sel_h.any() else None}
 
 
+def expectations(fwd: pd.DataFrame, holdings: dict[pd.Timestamp, list[str]], period_ret: pd.Series) -> dict:
+    """给用户的真实预期（样本外）：单只持仓下一期下跌的概率、组合每周亏钱的概率、最差一周 / 最差连续 4 周"""
+    vals = []
+    for d, codes in holdings.items():
+        if d < pd.Timestamp(OOS_START) or d not in fwd.index or not codes:
+            continue
+        v = fwd.loc[d].reindex(codes).to_numpy(dtype=float)
+        vals.append(v[np.isfinite(v)])
+    allv = np.concatenate(vals) if vals else np.array([])
+    r = period_ret.loc[OOS_START:]
+    nav = (1 + r).cumprod()
+    four = nav.pct_change(4).dropna()
+    return {
+        "stock_down": float((allv < 0).mean()) if allv.size else None, "stock_down5": float((allv < -0.05).mean()) if allv.size else None,
+        "stock_down10": float((allv < -0.10).mean()) if allv.size else None, "stock_n": int(allv.size),
+        "week_down": float((r < 0).mean()) if len(r) else None, "worst_week": float(r.min()) if len(r) else None,
+        "worst_4w": float(four.min()) if len(four) else None, "weeks": int(len(r)),
+    }
+
+
 def build_report(progress: Progress = None) -> dict:
     t0 = time.time()
     p, ctx, fac, mask = prepare(progress)
@@ -503,6 +583,7 @@ def build_report(progress: Progress = None) -> dict:
     except Exception as e:  # noqa: BLE001  这一节只是解释，出错不影响报告
         log.warning("主力阶段对照失败：%s", e)
         stages = None
+    expect = expectations(fwd, main_bt.holdings, main_bt.period_ret)
 
     report = {
         "generated_at": datetime.now(config.CHINA_TZ).strftime("%Y-%m-%d %H:%M"),
@@ -510,7 +591,7 @@ def build_report(progress: Progress = None) -> dict:
         "spec": {**asdict(spec), "top_n": TOP_N, "keep_rank": KEEP_RANK, "industry_cap": INDUSTRY_CAP, "min_amount": MIN_AMOUNT,
                  "max_participation": MAX_PARTICIPATION, "default_capital": DEFAULT_CAPITAL},
         "st_source": p.st_source, "capacity": capacity, "nav": nav, "random_cagr": rnd_final,
-        "methods": methods, "factors": factor_rows, "traits": tr, "indexes": INDEXES, "stage_check": stages,
+        "methods": methods, "factors": factor_rows, "traits": tr, "indexes": INDEXES, "stage_check": stages, "expect": expect,
         "seconds": round(time.time() - t0, 1),
     }
     _write(REPORT_FILE, report)

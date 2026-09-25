@@ -384,7 +384,8 @@ class ProviderRegistry:
 
 def sample_kwargs(capability: str) -> dict:
     """"测试连接"用的小参数"""
-    today: date = date.today()
+    from .. import config
+    today: date = datetime.now(config.CHINA_TZ).date()
     last_weekday: date = today - timedelta(days=1)
     while last_weekday.weekday() >= 5:
         last_weekday -= timedelta(days=1)

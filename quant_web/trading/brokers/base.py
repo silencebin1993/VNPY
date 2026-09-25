@@ -69,6 +69,15 @@ class Broker:
             return 0
 
     @staticmethod
+    def mark_uncertain(conn: sqlite3.Connection, account_id: str, order_id: str, code: str, message: str) -> dict:
+        """发给券商时出错（超时、断线、界面没反应）：券商那边可能已经收到了这笔委托，也可能没有。
+        不能当成"被拒绝"——那样你或程序再下一次就可能变成两笔。保持"已提交"，等同步成交核对（收盘后仍没成交会过期），并紧急提醒去券商 App 核对"""
+        conn.execute("UPDATE orders SET message=?, updated=? WHERE id=?", (f"提交结果不确定：{message}", ledger.now(), order_id))
+        ledger.alert(conn, account_id, code, "urgent", "broker", "下单结果不确定，先别重复下单",
+                     f"{message}。券商那边可能已经收到这笔委托：请马上在券商 App 的“当日委托”里核对；确认没有这笔之前，不要重新下单。")
+        return ledger.one(conn, "SELECT * FROM orders WHERE id=?", (order_id,))            # type: ignore[return-value]
+
+    @staticmethod
     def mark_rejected(conn: sqlite3.Connection, order_id: str, message: str) -> dict:
         o = ledger.one(conn, "SELECT * FROM orders WHERE id=?", (order_id,))
         if o and o["status"] in ("submitted", "pending_manual", "partial", "waiting_trigger"):

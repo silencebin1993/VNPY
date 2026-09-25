@@ -25,6 +25,7 @@ def lot_size(code: str) -> int:
 def suggest_stop(entry: float, atr: float | None = None, ma20: float | None = None, max_pct: float = 0.08,
                  min_pct: float = 0.02) -> dict:
     """建议止损价：{stop, basis, pct}；basis 说明依据（白话）"""
+    min_pct = min(min_pct, max_pct)                              # 设置里的止损比例比 2% 还小时，以设置为准
     floor_price: float = entry * (1 - max_pct)                   # 最远不超过这里
     cands: list[tuple[float, str]] = []
     if atr and atr > 0:

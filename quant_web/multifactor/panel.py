@@ -185,6 +185,12 @@ def load_panel(start: date | None = None, end: date | None = None, with_bs: bool
         have = pd.Index(sorted(bs["code"].unique().to_list()))
         st_bs = _pivot(bs.with_columns(pl.col("st").cast(pl.Float64)), "st", dates, codes).ffill()
         st.loc[:, have] = st_bs[have].fillna(0.0).astype(bool)
+        # baostock 历史只到下载那天；之后的日子（包括"今天"）再叠加股票列表里的当前 ST 状态，
+        # 否则之后新戴帽的股票会一直被当成非 ST（宁可多排除：已摘帽但历史里还是 ST 的，照样排除）
+        bs_last = pd.Timestamp(bs["date"].max())
+        later = st.index > bs_last
+        if later.any():
+            st.loc[later, cur_st[cur_st].index] = True
         for f in ("pe_ttm", "pb", "ps_ttm", "pcf"):
             valuation[f] = _pivot(bs, f, dates, codes)
         st_source = f"baostock({len(have)}/{len(codes)})"

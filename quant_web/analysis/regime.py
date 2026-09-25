@@ -22,8 +22,9 @@ from ..predict.backtest import HOLDOUT_START
 
 REGIMES: dict[str, dict] = {
     "strong": {"label": "强势", "tone": "good", "advice": "多数股票在涨，可以按计划操作；注意历史上强势之后并不一定涨得更多，不要因此加大仓位。"},
-    "neutral": {"label": "震荡", "tone": "neutral", "advice": "方向不明，按计划操作，只做把握大的，严格止损。"},
-    "weak": {"label": "弱势", "tone": "bad", "advice": "大多数股票在跌、波动变大：少买，降低总仓位；已有持仓严格执行止损，不要补仓摊平。"},
+    "neutral": {"label": "震荡", "tone": "neutral", "advice": "方向不明，按你的计划操作。"},
+    "weak": {"label": "弱势", "tone": "bad", "advice": "大多数股票在跌、波动变大。仓位上限只是控制波动的经验规则，不是涨跌预测；"
+                                                       "“量化选股”的周组合按大盘环境减仓，回测里反而更差（弱势周的收益并不低），它按固定仓位执行。"},
 }
 FWD: int = 20
 

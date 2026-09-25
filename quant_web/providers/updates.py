@@ -37,7 +37,9 @@ def _scaled(progress: Progress | None, lo: float, hi: float) -> Progress:
 
 
 def _today() -> date:
-    return date.today()
+    """北京时间的今天（这台电脑的时区是纽约，date.today() 会差一天）"""
+    from datetime import datetime
+    return datetime.now(config.CHINA_TZ).date()
 
 
 def _summary(ok: bool, rows: int, source: str | None, error: str | None) -> dict:

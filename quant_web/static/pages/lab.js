@@ -93,7 +93,7 @@
       const enableRun = async (r) => {
         const credible = r.verdict && r.verdict.credible;
         if (!credible && !confirm("这个模型在留出期（样本外）没有显著优势。启用后，选股器的“模型打分”会用它排序，但它的排序可能和随便挑差不多。\n\n仍然启用？")) return;
-        try { await api.post(`/api/lab/runs/${r.id}/enable`); toast.success("已启用：选股器里选“模型打分”就会用它"); await loadRuns(); if (detail.value) openRun(r.id); } catch (e) { /* 已提示 */ }
+        try { await api.post(`/api/lab/runs/${r.id}/enable`, { ack: !credible }); toast.success("已启用：选股器里选“模型打分”就会用它"); await loadRuns(); if (detail.value) openRun(r.id); } catch (e) { /* 已提示 */ }
       };
       const disable = async () => { try { await api.post("/api/lab/disable"); toast.success("已停用"); await loadRuns(); } catch (e) { /* 已提示 */ } };
       const removeRun = async (r) => {

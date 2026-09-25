@@ -1699,6 +1699,7 @@
       });
       const pageKey = computed(() => route.inst);
       const pageTitle = computed(() => store.pageTitle || route.title);
+      const fresh = computed(() => (store.status && store.status.freshness) || {});
       watch(pageTitle, (t) => { document.title = `${t} · 量化助手`; }, { immediate: true });
       const phaseCls = computed(() => ({ 交易中: "live", 午间休市: "noon", 盘前: "pre" })[store.phase] || "");
       const running = computed(() => jobs.running());
@@ -1723,7 +1724,7 @@
       watch(() => route.path, () => { moreOpen.value = false; searchOpen.value = false; });
       const tipRef = (el) => { tipEl = el; };
       return {
-        store, route, tip, tipRef, toastState, closeToast, navGroups, tabRoutes, moreRoutes, moreGroups, pageComp, pageKey, pageTitle, PAGE_CACHE,
+        store, route, tip, tipRef, toastState, closeToast, navGroups, tabRoutes, moreRoutes, moreGroups, pageComp, pageKey, pageTitle, PAGE_CACHE, fresh,
         phaseCls, running, runPct, runTip, updating, oneClick, toggleTheme, moreOpen, searchOpen, moreActive, fmt,
         onboardHidden, hideOnboard,
       };
@@ -1745,7 +1746,8 @@
           <div class="qw-top-status">
             <span v-if="!store.isPhone" class="qw-clock num"><small>北京时间</small>{{ store.clock }}</span>
             <span v-if="store.phase" class="qw-phase" :class="phaseCls" v-tip="'A股交易时间：工作日 9:30-11:30、13:00-15:00（北京时间）'"><i class="dot"></i>{{ store.phase }}</span>
-            <span v-if="store.dataDate && !store.isPhone" class="qw-datadate" v-tip="'本地日线数据的最新交易日'"><span class="qw-datadate-label">数据 </span>{{ fmt.cnDate(store.dataDate) }}</span>
+            <span v-if="store.dataDate && !store.isPhone" class="qw-datadate" :class="{warn: fresh.stale || fresh.partial}"
+              v-tip="fresh.stale ? '本地日线只到 ' + store.dataDate + '，最新一个已收盘的交易日是 ' + fresh.expected + '：点“一键更新”' : fresh.partial ? '最新一天的日线股票数比前一天少很多，可能没下载全：点“一键更新”补齐' : '本地日线数据的最新交易日（已是最新）'"><span class="qw-datadate-label">数据 </span>{{ fmt.cnDate(store.dataDate) }}<template v-if="fresh.stale"> · 不是最新</template><template v-else-if="fresh.partial"> · 可能不全</template></span>
           </div>
           <div class="qw-top-right">
             <qw-stock-search v-if="!store.isPhone"/>

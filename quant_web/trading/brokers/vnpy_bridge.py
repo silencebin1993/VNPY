@@ -131,7 +131,7 @@ class VnpyGatewayBroker(Broker):
         if req.kind in ("stop", "take_profit"):
             return place(conn, self.account["id"], req, ref_price=ref_price)    # 条件单等触发，不发给券商
         order: dict = place(conn, self.account["id"], req, ref_price=ref_price, status="submitted")
-        try:
+        try:                                                         # 发出去之前出错：确定没有下单
             price: float = _order_price(req, ref_price, self.settings)
             c: _Client = self._client()
             vt_req = VnOrderRequest(
@@ -139,12 +139,17 @@ class VnpyGatewayBroker(Broker):
                 direction=Direction.LONG if req.side == "buy" else Direction.SHORT, type=OrderType.LIMIT,
                 volume=float(req.qty), price=float(price), offset=Offset.NONE, reference="quant_web",
             )
-            vt_orderid = c.engine.send_order(vt_req, c.gateway_name)
-            if not vt_orderid:
-                raise ConnectionError("vnpy 网关下单失败（send_order 返回空委托号）")
         except Exception as e:                                       # noqa: BLE001  网关异常种类不可控
             self.mark_rejected(conn, order["id"], f"券商下单失败：{e}")
             ledger.alert(conn, self.account["id"], req.code, "urgent", "broker", "vnpy 网关下单失败", str(e))
+            return ledger.one(conn, "SELECT * FROM orders WHERE id=?", (order["id"],))          # type: ignore[return-value]
+        try:
+            vt_orderid = c.engine.send_order(vt_req, c.gateway_name)
+        except Exception as e:                                       # noqa: BLE001  发送时出错：网关可能已经发出
+            return self.mark_uncertain(conn, self.account["id"], order["id"], req.code, f"vnpy 网关下单时出错（{e}）")
+        if not vt_orderid:                                           # 网关明确没有接受（没连上等）
+            self.mark_rejected(conn, order["id"], "券商下单失败：vnpy 网关下单失败（send_order 返回空委托号）")
+            ledger.alert(conn, self.account["id"], req.code, "urgent", "broker", "vnpy 网关下单失败", "send_order 返回空委托号")
             return ledger.one(conn, "SELECT * FROM orders WHERE id=?", (order["id"],))          # type: ignore[return-value]
         conn.execute("UPDATE orders SET broker_order_id=? WHERE id=?", (vt_orderid, order["id"]))
         ledger.audit(conn, self.account["id"], "broker_place", {"order_id": order["id"], "broker_order_id": vt_orderid})

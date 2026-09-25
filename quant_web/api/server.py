@@ -130,6 +130,14 @@ def panel_stats() -> dict:
         mtime: float = max(p.stat().st_mtime for p in files)
         row["updated_at"] = datetime.fromtimestamp(mtime, config.CHINA_TZ).strftime("%Y-%m-%d %H:%M:%S")
         row["empty"] = not row["rows"]
+        # 最新两天各有多少只股票有日线（最新一天明显变少 = 没下载全）
+        try:
+            last2 = (pl.scan_parquet(str(files[-1])).filter(pl.col("tradestatus") != 0).group_by("date").agg(pl.len().alias("n"))
+                     .sort("date").tail(2).collect())
+            if last2.height == 2:
+                row["latest_n"], row["prev_n"] = int(last2["n"][1]), int(last2["n"][0])
+        except Exception:  # noqa: BLE001
+            pass
         return row
     return CACHE.get("panel_stats", build, sig=panel_sig())
 
@@ -627,11 +635,25 @@ def register_routes(app: FastAPI) -> None:
     def status() -> SafeJSONResponse:
         s = settings_mod.load()
         stats: dict = panel_stats()
+        # 数据新不新、全不全：最新一个已收盘的交易日 vs 本地日线最后一天；最新一天股票数比前一天少 3% 以上 = 可能没下载全
+        fresh: dict = {}
+        try:
+            from ..market import history as hist_mod
+            from ..trading import calendar as tcal
+            now = tcal.china_now()
+            closed = tcal.is_trading_day(now.date()) and now.hour * 60 + now.minute >= hist_mod.CLOSE_MINUTE
+            expected = now.date() if closed else tcal.prev_trading_day(now.date())
+            end = stats.get("end")
+            fresh = {"expected": str(expected), "stale": bool(end) and str(end) < str(expected),
+                     "partial": bool(stats.get("prev_n")) and stats.get("latest_n", 0) < 0.97 * stats["prev_n"]}
+        except Exception:  # noqa: BLE001
+            fresh = {}
         return ok({
             "now": now_text(),
             "today": china_now().date(),
             "phase": phase(),
             "panel": stats,
+            "freshness": fresh,
             "first_run": bool(stats.get("empty")),
             "models": {k: model_summary(k) for k in KINDS},
             "jobs": JOBS.running(),

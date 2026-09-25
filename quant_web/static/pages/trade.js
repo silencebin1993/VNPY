@@ -15,9 +15,9 @@
   const LEVEL = { block: ["red", "禁止"], confirm: ["warn", "需要你确认"], warn: ["warn", "提醒"], info: ["gray", "说明"] };
   const ALERT_LV = { urgent: ["red", "紧急"], warn: ["warn", "重要"], info: ["gray", "一般"] };
   const TONE_TAG = { bad: "green", good: "red", watch: "warn", neutral: "gray" };
-  const STAGE_TAG = { accumulation: "warn", washout: "warn", markup: "red", distribution: "green", decline: "green", unclear: "gray" };
+  const STAGE_TAG = { accumulation: "gray", washout: "gray", markup: "warn", distribution: "warn", decline: "gray", unclear: "gray" };   // 阶段只是形态描述：只把历史上之后偏弱的"拉升 / 出货"标黄
   const STAGE_LABEL = { accumulation: "吸筹", washout: "洗盘", markup: "拉升", distribution: "出货", decline: "下跌", unclear: "不明确" };
-  const RISK_TAG = { red: ["red", "红灯：建议回避"], yellow: ["warn", "黄灯：需要注意"], green: ["green", "未发现明显风险"] };
+  const RISK_TAG = { red: ["red", "红灯：看具体项目"], yellow: ["warn", "黄灯：需要注意"], green: ["green", "未发现明显风险"] };
   const pct = (v, d = 2) => (isNum(v) ? fmt.ratio(v, d, true) : "—");
   const cls = (v) => (isNum(v) ? (v > 0 ? "up" : v < 0 ? "down" : "") : "");
   const readLS = () => { try { return localStorage.getItem(LS_KEY); } catch (e) { return null; } };
@@ -579,7 +579,7 @@
           <qw-skeleton v-if="nLoading && !nightly" :rows="5"/>
           <template v-else-if="nightly">
             <div v-if="nightly.regime" class="sc-regime" :class="'t-' + nightly.regime.tone"><qw-icon name="gauge" :size="16"/>
-              <span>大盘环境：<b>{{ nightly.regime.label }}</b>，建议总仓位不超过 <b>{{ $fmt.ratio(nightly.regime.cap, 0) }}</b>。{{ nightly.regime.advice }}</span></div>
+              <span>大盘环境：<b>{{ nightly.regime.label }}</b>，仓位上限（你设置的经验规则，不是涨跌预测）<b>{{ $fmt.ratio(nightly.regime.cap, 0) }}</b>。{{ nightly.regime.advice }}</span></div>
             <p class="muted" style="font-size:12.5px;margin:8px 0 0">每个交易日收盘、每日更新完成后自动生成并推送；晚上看一眼，明天照着做。</p>
           </template>
           <qw-empty v-else compact icon="calendar" title="还没有明日计划" desc="点“重新生成”，或等今天收盘后的每日更新。"/>
@@ -616,7 +616,7 @@
               <div v-for="(x, i) in a.conditional" :key="i" class="td-cond-item"><span class="qw-tag" :class="x.type.startsWith('止损') ? 'green' : 'red'">{{ x.type }}</span><span>{{ x.text }}</span></div>
             </div>
           </qw-card>
-          <qw-card title="候选买入" icon="filter" :pad="false" :sub="nightly.candidates.length ? '来自每天自动运行的选股方案' : ''">
+          <qw-card title="候选买入" icon="filter" :pad="false" :sub="nightly.candidates.length ? '来自每天自动运行的选股器方案：历史回测没有跑赢随机，只供参考' : ''">
             <qw-table v-if="nightly.candidates.length" :rows="nightly.candidates" :row-key="(r) => r.scheme_id + r.code" dense
               :columns="[{key:'name',label:'股票'},{key:'scheme',label:'方案'},{key:'close',label:'收盘',align:'right'},{key:'plan',label:'建议止损 / 股数',align:'right'},{key:'reasons',label:'理由',minWidth:'200px'},{key:'act',label:'',align:'right'}]">
               <template #cell-name="{row}"><qw-stock :code="row.code" :name="row.name"/></template>
@@ -735,8 +735,8 @@
             </div>
             <div class="row" style="margin-top:12px">
               <label class="sc-chk"><input type="checkbox" v-model="cfg.risk.require_stop">买入必须设止损</label>
-              <label class="sc-chk"><input type="checkbox" v-model="cfg.risk.block_distribution">疑似出货 / 下跌阶段禁止买入</label>
-              <label class="sc-chk"><input type="checkbox" v-model="cfg.risk.block_risk_red">排雷红灯禁止买入</label>
+              <label class="sc-chk"><input type="checkbox" v-model="cfg.risk.block_distribution">买“疑似出货 / 拉升”阶段的股票前提醒我</label>
+              <label class="sc-chk"><input type="checkbox" v-model="cfg.risk.block_risk_red">排雷硬伤（退市 / ST / 资不抵债 / 成交极冷 / 监管处罚）禁止买入</label>
               <label class="sc-chk"><input type="checkbox" v-model="cfg.risk.warn_average_down">亏损补仓时提醒</label>
             </div>
             <template #footer><button class="btn primary" :disabled="!cfgDirty.risk" @click="saveCfg('risk')"><qw-icon name="save" :size="14"/>保存风控设置</button></template>

@@ -80,6 +80,18 @@
         };
       });
       const capLabel = (v) => (v >= 1e8 ? (v / 1e8) + " 亿" : (v / 1e4) + " 万");
+      // 按你的资金：容量表里最接近的一档（对数距离）——资金越大优势越小，横幅默认显示的是 500 万
+      const capFor = computed(() => {
+        const rows = capRows.value;
+        const c = Number(capital.value) || (data.value && data.value.capital);
+        if (!rows.length || !c) return null;
+        let best = rows[0];
+        rows.forEach((r) => { if (Math.abs(Math.log(r.capital / c)) < Math.abs(Math.log(best.capital / c))) best = r; });
+        return { row: best, seg: best.segments["全部样本外"], mine: c };
+      });
+      const health = computed(() => (data.value && data.value.health) || null);
+      const expect = computed(() => (report.value && report.value.expect) || null);
+      const nRand = computed(() => (report.value && report.value.random_cagr ? report.value.random_cagr.length : 0));
       const tCls = (t) => (isNum(t) ? (t >= 2 ? "up" : t >= 1 ? "" : "muted") : "muted");
 
       const navOption = computed(() => {
@@ -163,7 +175,7 @@
       return {
         HELP, GROUPS, GROUP_KEYS, fmt, isNum, data, report, track, plan, loading, err, tab, capital, capSel, job, jobTitle, today, targetRows,
         sellRows, allRows, runJob, onJobDone, capRows, capNow, segOOS, mainCap, verdict, capLabel, tCls, navOption, histOption, factorRows,
-        trackRows, trackSum, groupBar, loadPlan, stageRows, stageNote, wk,
+        trackRows, trackSum, groupBar, loadPlan, stageRows, stageNote, wk, capFor, health, expect, nRand,
       };
     },
     template: `<div class="mf-page">
@@ -178,10 +190,17 @@
           <div><span>同池随机<qw-help :text="HELP.random"/></span><b>{{ fmt.ratio(verdict.s.bench_cagr, 1, true) }}</b></div>
           <div><span>每年超额</span><b :class="$fmt.dir(verdict.s.excess_ann)">{{ fmt.ratio(verdict.s.excess_ann, 1, true) }}</b></div>
           <div><span>t 值<qw-help :text="HELP.t"/></span><b :class="tCls(verdict.s.excess_t)">{{ fmt.t(verdict.s.excess_t) }}</b></div>
-          <div><span>跑赢随机组合</span><b>{{ isNum(verdict.s.random_pct) ? fmt.ratio(verdict.s.random_pct, 0) : '—' }}</b></div>
+          <div><span>跑赢的随机组合</span><b>{{ isNum(verdict.s.random_pct) && nRand ? Math.round(verdict.s.random_pct * nRand) + ' / ' + nRand : '—' }}</b><small>同换手、同费用随便挑 50 只</small></div>
           <div><span>最大回撤</span><b class="down">{{ fmt.ratio(verdict.s.maxdd, 1) }}</b><small>随机 {{ fmt.ratio(verdict.s.bench_maxdd, 1) }}</small></div>
           <div><span>比中证1000</span><b :class="$fmt.dir(verdict.s.vs_sh000852)">{{ fmt.ratio(verdict.s.vs_sh000852, 1, true) }}/年</b></div>
         </div>
+        <div v-if="capFor && capFor.mine < capRows[0].capital * 0.7" class="mf-verdict-cap warn">
+          <qw-icon name="alert" :size="14"/><span>你的资金（{{ capLabel(capFor.mine) }}）低于回测的最小一档（{{ capLabel(capRows[0].capital) }}）：50 只平分每只只有约 {{ $fmt.money(capFor.mine / 50) }}，
+            不少股票连一手都买不起，只能少买几只——持股越少越接近碰运气，实际结果会和上面的回测差很多。</span></div>
+        <div v-else-if="capFor && capFor.row.capital !== report.spec.default_capital" class="mf-verdict-cap">
+          <qw-icon name="scale" :size="14"/><span>按你的资金（{{ capLabel(capFor.mine) }}），容量表里最接近的是 <b>{{ capLabel(capFor.row.capital) }}</b> 这一档：
+            年化 <b :class="$fmt.dir(capFor.seg.cagr)">{{ fmt.ratio(capFor.seg.cagr, 1, true) }}</b>，每年超额 <b :class="$fmt.dir(capFor.seg.excess_ann)">{{ fmt.ratio(capFor.seg.excess_ann, 1, true) }}</b>（t {{ fmt.t(capFor.seg.excess_t) }}）
+            <template v-if="capFor.seg.excess_t < 2">——这个资金规模下，统计上已经不算可靠的优势。</template></span></div>
         <div class="mf-verdict-risk"><qw-icon name="alert" :size="14"/><span>不是保证：历史上 2024 年基本持平；组合偏中小市值、低换手、低波动的股票，小盘股集体大跌时（如 2024 年初）也会一起跌；
           市场整体下跌时组合也会亏钱。资金越大优势越小，上亿资金基本没有优势（见下方容量表）。
           另外，这是在几种方法里挑出的最好的一种（见“为什么用 LightGBM”），实际表现大概率比回测差一些——以“前向跟踪”的真实记录为准。</span></div>
@@ -191,6 +210,11 @@
         <div class="mf-goal-hd"><qw-icon name="target" :size="16"/><b>这个功能的目标</b>
           <span>每周换一次仓、同时拿 50 只股票，长期（按年算）比“随便买”的平均多赚<template v-if="verdict">约 <b class="up">{{ fmt.ratio(verdict.s.excess_ann, 0) }}/年</b></template>。
           它不是挑“明天就涨”的股票：单只有涨有跌，靠一篮子整体取胜，所以不追涨、单只不设止损。</span></div>
+        <div v-if="expect" class="mf-goal-hd mf-expect"><qw-icon name="alert" :size="16"/><b>先有心理准备</b>
+          <span>历史上（样本外 {{ expect.weeks }} 周）：组合有 <b>{{ fmt.ratio(expect.week_down, 0) }}</b> 的周是亏的，最差的一周 <b class="down">{{ fmt.ratio(expect.worst_week, 1) }}</b>、
+            最差的连续 4 周 <b class="down">{{ fmt.ratio(expect.worst_4w, 1) }}</b>；单只股票下一周下跌的概率约 <b>{{ fmt.ratio(expect.stock_down, 0) }}</b>
+            （跌超 10% 的约 {{ fmt.ratio(expect.stock_down10, 1) }}）。<b>没有办法保证买到的每一只都涨</b>——优势来自 50 只 × 很多周平均下来；
+            只买其中几只、或者亏几周就停，结果就接近碰运气。</span></div>
         <div class="st-flow mf-flow">
           <div class="st-step"><i>1</i><div><b>每周最后一个交易日晚上</b><span>程序自动打分（开着就行），下面“本周选股”给出这一期的 50 只</span></div></div>
           <qw-icon name="chevronRight" :size="16" class="st-arrow"/>
@@ -214,6 +238,11 @@
         </div>
       </div>
       <qw-job v-if="job" :job-id="job" :title="jobTitle" @done="onJobDone" @failed="job = ''"/>
+      <div v-if="health" class="mf-health" :class="health.ok ? 'ok' : 'bad'">
+        <div class="mf-health-hd"><qw-icon :name="health.ok ? 'checkCircle' : 'xCircle'" :size="16"/>
+          <b>{{ health.ok ? '下单前自检通过：今天的名单可以用' : '下单前自检没通过：先处理下面标红的问题，再按名单下单' }}</b></div>
+        <ul><li v-for="i in health.items" :key="i.key + i.text" :class="i.level"><qw-icon :name="i.level === 'ok' ? 'check' : 'alert'" :size="13"/>{{ i.text }}</li></ul>
+      </div>
 
       <qw-empty v-if="err" icon="alert" title="读取失败" :desc="err"/>
       <qw-empty v-else-if="!loading && !today" icon="target" title="还没有量化选股结果" desc="点“重新打分”，大约 1 分钟：用最新日线给全部主板股票打分，并给出本周调仓组合。">
@@ -223,7 +252,7 @@
       <div v-if="today" class="mf-top">
         <qw-card :pad="false" class="mf-list" title="本周选股" icon="target" :help="HELP.method"
           :sub="'多因子 + LightGBM，持有前 ' + (data.config ? data.config.top_n : 50) + ' 名'">
-          <div class="mf-tabs"><qw-tabs v-model="tab" :items="[{value:'target',label:'调仓组合',badge:targetRows.length},{value:'all',label:'全部排名',badge:allRows.length},{value:'sell',label:'要卖出',badge:sellRows.length}]"/>
+          <div class="mf-tabs"><qw-tabs v-model="tab" :items="[{value:'target',label:'调仓组合',badge:targetRows.length},{value:'all',label:'前 300 名',badge:allRows.length},{value:'sell',label:'要卖出',badge:sellRows.length}]"/>
             <span class="muted mf-tabs-note">可买股票 {{ today.universe_n }} 只<template v-if="today.capacity_n < today.universe_n">，按你的资金（{{ capLabel(today.capital) }}）流动性够的 {{ today.capacity_n }} 只</template> · <span v-tip="HELP.keep">持有规则</span></span></div>
           <qw-table v-if="tab !== 'sell'" :rows="tab === 'target' ? targetRows : allRows" row-key="code" dense clickable max-height="560px" :page-size="300"
             @row-click="(r) => $go('/watch/' + r.code)" empty-text="没有股票"
@@ -240,7 +269,8 @@
           </qw-table>
           <div v-else class="mf-sell">
             <qw-empty v-if="!sellRows.length" compact icon="check" title="没有要卖出的股票" :desc="today.prev_target && today.prev_target.length ? '上一期的持仓排名都还在前 150 名以内。' : '这是第一期组合（还没有上一期）。'"/>
-            <div v-else class="mf-sell-list"><a v-for="s in sellRows" :key="s.code" class="chip" :href="'#/watch/' + s.code">{{ s.name || s.code }} <span class="muted">{{ s.rank ? '现排 ' + s.rank : '掉出前 300' }}</span></a></div>
+            <div v-else class="mf-sell-list"><a v-for="s in sellRows" :key="s.code" class="chip" :href="'#/watch/' + s.code">{{ s.name || s.code }} <span class="muted">{{ s.rank ? '现排 ' + s.rank : '掉出前 300' }}</span></a>
+              <span class="muted" style="font-size:12px;width:100%">停牌中的先别急：复牌后再卖（右边下单清单里有标注）。</span></div>
           </div>
         </qw-card>
 
@@ -258,22 +288,31 @@
                 <thead><tr><th>股票</th><th>操作</th><th class="num">股数</th><th class="num">金额</th></tr></thead>
                 <tbody>
                   <tr v-for="it in plan.items" :key="it.code" :class="{muted: it.too_small}">
-                    <td><a :href="'#/watch/' + it.code">{{ it.name || it.code }}</a></td>
-                    <td><span :class="it.action === '买入' ? 'up' : 'muted'">{{ it.action }}</span></td>
+                    <td><a :href="'#/watch/' + it.code">{{ it.name || it.code }}</a>
+                      <span v-if="it.limit_up" class="qw-tag warn" v-tip="'今天收盘涨停：明天很可能开盘就涨停买不进，买不进就跳过，按下面的候补顺序换'">涨停</span>
+                      <span v-if="it.too_big" class="qw-tag warn" v-tip="'每只要买的金额超过它每天成交额的 5%：一次买会把价格买上去，建议分 2~3 天买'">量大</span></td>
+                    <td><span :class="it.action === '买入' ? 'up' : 'muted'" v-tip="it.action === '继续持有' ? '已经有的不用卖；股数调到右边这个数（差一手以内可以不动）' : ''">{{ it.action }}</span></td>
                     <td class="num">{{ it.shares }}</td>
                     <td class="num">{{ $fmt.money(it.amount) }}</td>
                   </tr>
-                  <tr v-for="s in plan.sells" :key="'s' + s.code"><td><a :href="'#/watch/' + s.code">{{ s.name || s.code }}</a></td><td class="down">全部卖出</td><td></td><td></td></tr>
+                  <tr v-for="s in plan.sells" :key="'s' + s.code"><td><a :href="'#/watch/' + s.code">{{ s.name || s.code }}</a></td>
+                    <td class="down" v-if="!s.halted">全部卖出</td><td v-else class="muted" v-tip="'最新一天没有成交（停牌），现在也卖不出去：复牌后第一个能卖的交易日再卖'">停牌中，复牌后再卖</td><td></td><td></td></tr>
                 </tbody>
               </table>
+            </div>
+            <div v-if="plan.backups && plan.backups.length" class="mf-backups">
+              <b>候补</b><span class="muted">新买入的开盘涨停 / 停牌买不进时，按顺序换这些（同样守每个行业最多 8 只）：</span>
+              <div class="mf-sell-list"><a v-for="b in plan.backups" :key="b.code" class="chip sm" :href="'#/watch/' + b.code">{{ b.name || b.code }}
+                <span class="muted">第 {{ b.rank }} 名 · {{ b.shares }} 股</span><span v-if="b.limit_up" class="qw-tag warn">涨停</span></a></div>
             </div>
           </template>
           <div class="mf-howto">
             <b>怎么执行</b>
             <ol>
               <li>每周最后一个交易日晚上看这里的组合；下一个交易日开盘（集合竞价）按清单买卖。</li>
-              <li>开盘就涨停买不进的跳过，改买排名下一只；开盘跌停卖不出的，等能卖的那天再卖。</li>
-              <li>不在周中追加或换股；组合整体跟随市场涨跌，单只股票不设止损（回测就是这样做的）。</li>
+              <li>开盘就涨停买不进的跳过，按上面的“候补”顺序换；开盘跌停卖不出的，等能卖的那天再卖。</li>
+              <li>不在周中追加或换股；单只股票不设止损（回测就是这样做的。我们测过：每只加 8% 止损，每年少赚 2~3 个百分点，最大回撤只小 1 个百分点左右）。</li>
+              <li>大盘弱势也照常调仓：按大盘环境减仓，回测里年化从 22% 降到 12%，风险调整后也更差。想少担风险，就固定少投一些钱（比如只投一半），不要看大盘进进出出。</li>
               <li>不确定就先<a href="#/strategy?tpl=mf_weekly">开模拟跟踪</a>：程序在模拟账户里每周自动照做，跑一段时间看看再用真钱。</li>
             </ol>
           </div>

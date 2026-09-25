@@ -56,8 +56,8 @@ def position_actions(conn, account_id: str, day: date, with_stage: bool = True, 
             action, tone = "明天开盘卖出", "bad"
             reasons.append(f"收盘 {close:.2f} 已跌破止损价 {plan['stop']:.2f}")
         elif stage_key == "distribution":
-            action, tone = "减仓或上移止损", "bad"
-            reasons.append("主力阶段判断为疑似出货")
+            action, tone = "留意：疑似出货", "watch"
+            reasons.append("主力阶段判断为疑似出货（历史上之后一周平均偏弱，但不是一定会跌）：按你的计划处理，止损价别往下挪")
         elif plan and plan.get("target") and close >= plan["target"]:
             action, tone = "部分止盈", "good"
             reasons.append(f"已到目标价 {plan['target']:.2f}")
@@ -87,7 +87,8 @@ def conditional_orders(actions: list[dict]) -> list[dict]:
     return out
 
 
-def candidates(limit: int = 5) -> list[dict]:
+def candidates(limit: int = 5, day: date | None = None) -> list[dict]:
+    """day 给了就只用那一天的结果：当天的选股没跑成功时，不拿以前的名单冒充今天的"""
     from .. import settings as settings_mod
     from ..screener import store as sstore
 
@@ -95,14 +96,14 @@ def candidates(limit: int = 5) -> list[dict]:
     out: list[dict] = []
     for sid in ids:
         res = sstore.latest_result(sid)
-        if not res:
+        if not res or (day is not None and res.get("date") != str(day)):
             continue
         for r in res.get("rows", [])[:limit]:
             if r.get("shares"):
                 out.append({**r, "scheme_id": sid, "scheme_name": res.get("scheme", {}).get("name"), "result_date": res.get("date")})
     try:                                                    # 策略中心里开启了"实盘建议"的策略
         from ..strategy import follow
-        out += follow.live_candidates()
+        out += follow.live_candidates(str(day) if day is not None else None)
     except Exception:  # noqa: BLE001
         pass
     return out
@@ -153,7 +154,7 @@ def build(day: date | None = None, with_stage: bool = True) -> dict:
     res: dict = {
         "date": str(day), "generated_at": datetime.now(config.CHINA_TZ).strftime("%Y-%m-%d %H:%M"),
         "regime": {k: reg.get(k) for k in ("label", "cap", "advice", "tone", "date")} if reg else None,
-        "accounts": accounts_out, "candidates": candidates(), "mf_rebalance": mf_rebalance(day),
+        "accounts": accounts_out, "candidates": candidates(day=day), "mf_rebalance": mf_rebalance(day),
         "note": "候选买入只是“符合方案、排名靠前”的股票，需要你逐只看诊断后在“交易”页确认才会下单；"
                 "这些候选来自选股器方案，它们的历史回测都没有显著跑赢随机，仓位宁小勿大；"
                 "样本外显著跑赢随机的是“量化选股”页面的每周组合。",

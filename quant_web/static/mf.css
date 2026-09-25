@@ -102,3 +102,22 @@
 .mf-stage-do .qw-icon { flex: none; margin-top: 5px; color: var(--primary); }
 .mf-stage .mf-scroll { overflow-x: auto; }
 .mf-stage th { vertical-align: bottom; line-height: 1.35; }
+
+/* 下单前自检 */
+.mf-health { border-radius: var(--radius); padding: 10px 14px; border: 1px solid var(--border); background: var(--surface); }
+.mf-health.ok { border-color: color-mix(in srgb, var(--up) 30%, var(--border)); }
+.mf-health.bad { border-color: var(--warn); background: var(--warn-weak); }
+.mf-health-hd { display: flex; gap: 6px; align-items: center; font-size: 14px; }
+.mf-health.ok .mf-health-hd .qw-icon { color: var(--up); }
+.mf-health.bad .mf-health-hd .qw-icon { color: var(--warn); }
+.mf-health ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 2px 16px; font-size: 12.5px; }
+.mf-health li { display: flex; gap: 5px; align-items: flex-start; line-height: 1.6; color: var(--text-2); }
+.mf-health li .qw-icon { flex: none; margin-top: 4px; }
+.mf-health li.bad { color: var(--down); font-weight: 600; }
+.mf-health li.warn { color: var(--warn); }
+.mf-verdict-cap { display: flex; gap: 6px; font-size: 13px; line-height: 1.6; }
+.mf-verdict-cap .qw-icon { flex: none; margin-top: 4px; color: var(--primary); }
+.mf-expect > .qw-icon { color: var(--warn); }
+.mf-backups { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; font-size: 12.5px; }
+.mf-verdict-cap.warn { color: var(--warn); }
+.mf-verdict-cap.warn .qw-icon { color: var(--warn); }

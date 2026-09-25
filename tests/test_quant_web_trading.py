@@ -142,8 +142,21 @@ def test_risk_rules(ws: Path) -> None:
         assert "single_cap" in codes(r) and "risk_per_trade" in codes(r)
         r = risk.check(c, acc, OrderRequest("600000", "buy", 100, "limit", 12.0), _ctx())
         assert "price_band" in codes(r)
+        # 主力阶段：历史上"出货""拉升"之后一周平均偏弱 → 只要求确认；"下跌"之后并不更差 → 不拦（量化选股的持仓三成是"下跌"）
         r = risk.check(c, acc, OrderRequest("600000", "buy", 1000, "limit", 10.0), _ctx(stage="distribution"))
-        assert r["blocked"] and "stage" in codes(r)
+        assert not r["blocked"] and r["need_confirm"] and "stage" in codes(r)
+        r = risk.check(c, acc, OrderRequest("600000", "buy", 1000, "limit", 10.0), _ctx(stage="markup"))
+        assert r["need_confirm"] and "stage" in codes(r)
+        r = risk.check(c, acc, OrderRequest("600000", "buy", 1000, "limit", 10.0), _ctx(stage="decline"))
+        assert "stage" not in codes(r)
+        # 排雷：硬伤（退市 / ST / 资不抵债……）禁止；亏损、业绩预告这类软红灯只要求确认
+        r = risk.check(c, acc, OrderRequest("600000", "buy", 1000, "limit", 10.0), _ctx(risk_level="red", risk_hard=True, risk_titles=["ST 风险警示"]))
+        assert r["blocked"] and "risk_red" in codes(r)
+        r = risk.check(c, acc, OrderRequest("600000", "buy", 1000, "limit", 10.0), _ctx(risk_level="red", risk_hard=False, risk_titles=["连续亏损"]))
+        assert not r["blocked"] and r["need_confirm"] and "risk_red" in codes(r)
+        # 20 日平均成交额低于设置的下限：要求确认
+        r = risk.check(c, acc, OrderRequest("600000", "buy", 1000, "limit", 10.0), _ctx(amt20=1e7))
+        assert "liquidity" in codes(r)
         r = risk.check(c, live, OrderRequest("600000", "buy", 1000, "limit", 10.0), _ctx())
         assert "live_off" in codes(r)
         r = risk.check(c, acc, OrderRequest("600000", "sell", 100, "limit", 10.0), _ctx())
@@ -171,7 +184,7 @@ def svc(ws: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     monkeypatch.setattr(service, "recent_levels", lambda code, days=60: {"ma20": 9.6, "ma10": 9.8, "atr": 0.2})
     monkeypatch.setattr(service, "regime_cap", lambda: 0.7)
     fake_diag = types.ModuleType("quant_web.analysis.diagnose")
-    fake_diag.full = lambda code: {"stage": {"key": "markup"}, "risk": {"level": "green"}, "name": "浦发"}
+    fake_diag.full = lambda code: {"stage": {"key": "unclear"}, "risk": {"level": "green"}, "name": "浦发"}
     monkeypatch.setitem(sys.modules, "quant_web.analysis.diagnose", fake_diag)
     import quant_web.analysis
     monkeypatch.setattr(quant_web.analysis, "diagnose", fake_diag, raising=False)
@@ -388,14 +401,18 @@ def test_live_stop_and_queued_failures_still_alert(svc: dict, monkeypatch: pytes
     # 撤掉止盈单；第二天：自动卖出报错 + 排队的买单开盘提交失败
     service.cancel(acc["id"], tp["id"])
     with ledger.connect() as c:
-        q = engine.place(c, acc["id"], OrderRequest("000001", "buy", 100, "limit", 11.0), status="queued")
+        q = engine.place(c, acc["id"], OrderRequest("000001", "buy", 100, "limit", 11.0), status="queued", trade_date=date(2026, 9, 24))
+        stale = engine.place(c, acc["id"], OrderRequest("000001", "buy", 100, "limit", 11.0), status="queued", trade_date=date(2026, 9, 23))
     FakeAuto.mode = "raise"
     out = service.run_intraday(datetime(2026, 9, 24, 10, 0))
     assert out["alerts"] == 1 and "自动卖出失败" in stop_alerts()[-1]["body"] and stop_alerts()[-1]["level"] == "urgent"
     with ledger.connect() as c:
         qo = ledger.one(c, "SELECT * FROM orders WHERE id=?", (q["id"],))
         rej = ledger.rows(c, "SELECT * FROM alerts WHERE kind='order_rejected'")
-    assert qo["status"] == "cancelled" and "开盘提交失败" in qo["message"] and len(rej) == 1
+        so = ledger.one(c, "SELECT * FROM orders WHERE id=?", (stale["id"],))
+    assert qo["status"] == "cancelled" and "开盘提交失败" in qo["message"]
+    # 过了交易日还在排队的（那天没提交出去）：作废并提醒，不会晚几天突然提交
+    assert so["status"] == "expired" and "作废" in so["message"] and len(rej) == 2
     # 第三天：正常自动卖出（数量不超过可卖）
     FakeAuto.mode = "ok"
     service.run_intraday(datetime(2026, 9, 25, 10, 0))

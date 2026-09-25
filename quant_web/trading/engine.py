@@ -173,8 +173,10 @@ def apply_fill(conn: sqlite3.Connection, order_id: str | None, account_id: str, 
 
 
 def expire_day_orders(conn: sqlite3.Connection, account_id: str, day: date) -> int:
-    """当天有效的委托，收盘后没成交完就过期（释放冻结资金）"""
-    olds = ledger.rows(conn, "SELECT * FROM orders WHERE account_id=? AND valid='day' AND status IN ('submitted','partial') "
+    """当天有效的委托，收盘后没成交完就过期（释放冻结资金）。
+    排队（queued）的实盘委托也一样：到了它的交易日收盘还没提交出去（程序没开 / 实盘开关关着），就作废，
+    不会在以后某天突然按那时的价格提交出去"""
+    olds = ledger.rows(conn, "SELECT * FROM orders WHERE account_id=? AND valid='day' AND status IN ('submitted','partial','queued') "
                              "AND trade_date<=?", (account_id, day.isoformat()))
     for o in olds:
         cancel(conn, o["id"], "expired", "当天没有成交，已过期")
@@ -251,6 +253,8 @@ def match_with_quotes(conn: sqlite3.Connection, account_id: str, day: date, quot
         px = rules.match_quote(o["side"], o["kind"], q, o["price"], o["trigger"])
         if px is None:
             continue
+        if o["side"] == "buy" and not _credit_ok(conn, o, left, px, day):
+            continue                                                    # 先卖后买的换仓：卖出还没回笼够钱，这笔先不买（盘中和日终同一条规则）
         info = apply_fill(conn, o["id"], account_id, o["code"], o["side"], left, px, day, o.get("name"), "paper_live", o.get("plan_id"))
         done.append({"order_id": o["id"], "code": o["code"], "side": o["side"], "qty": left, "price": px, **info})
     return done

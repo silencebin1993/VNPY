@@ -72,8 +72,13 @@ def eligible_expr(boards: tuple[str, ...], exclude_st: bool, min_amount: float) 
     return e
 
 
-def forward_returns(df: pl.DataFrame, hold: int, cost: costs_mod.Costs) -> pl.DataFrame:
-    """每一行"明天开盘买、持有 hold 天收盘卖"的净收益：列 filled（能否买进）、net（扣成本净收益）、exit_date"""
+def forward_returns(df: pl.DataFrame, hold: int, cost: costs_mod.Costs, delisted: set[str] | None = None) -> pl.DataFrame:
+    """每一行"明天开盘买、持有 hold 天收盘卖"的净收益：列 filled（能否买进）、net（扣成本净收益）、exit_date。
+    持有期间退市（之后再也没有行情）的，按最后一个收盘价算（和 predict/execution 的 R_DELISTED 同一口径）——
+    不能把它们当成"还没结束"丢掉，否则爱买暴跌股的方法会显得比实际好"""
+    if delisted is None:
+        from ..predict.execution import load_delisted
+        delisted = load_delisted()
     over = lambda e: e.over("code")                                            # noqa: E731
     nxt = lambda c, k: over(pl.col(c).shift(-k))                               # noqa: E731
     entry_ok: pl.Expr = (
@@ -95,6 +100,12 @@ def forward_returns(df: pl.DataFrame, hold: int, cost: costs_mod.Costs) -> pl.Da
         pl.coalesce(exit_q).alias("_exit_q"),
         pl.coalesce(exit_d).alias("exit_date"),
     )
+    if delisted and out.height:
+        last_d = pl.col("date").last().over("code")
+        miss = (pl.col("_exit_q").is_null() & pl.col("filled") & pl.col("code").is_in(list(delisted))
+                & (last_d > pl.col("date")) & (last_d < out["date"].max()))           # 在数据结束之前就没有行情了 = 退市
+        out = out.with_columns(pl.when(miss).then(pl.col("close").drop_nulls().last().over("code")).otherwise(pl.col("_exit_q")).alias("_exit_q"),
+                               pl.when(miss).then(last_d).otherwise(pl.col("exit_date")).alias("exit_date"))
     stamp: pl.Expr = costs_mod.stamp_duty_expr(pl.col("exit_date")) if cost.stamp is None else pl.lit(float(cost.stamp))
     factor: pl.Expr = ((1 - cost.slippage) * (1 - cost.commission - stamp)) / ((1 + cost.slippage) * (1 + cost.commission))
     out = out.with_columns(

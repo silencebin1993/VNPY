@@ -6,8 +6,8 @@
    缓存：同样模板 + 参数回测过就直接显示（后端按参数查）；每个模板 / 策略的回测、进行中的任务按选中项记住；页面被 keep-alive 缓存。 */
 (function () {
   "use strict";
-  const { ref, reactive, computed, onMounted, nextTick } = Vue;
-  const { api, fmt, toast, jobs, isNum } = QW;
+  const { ref, reactive, computed, onMounted, nextTick, watch } = Vue;
+  const { api, fmt, toast, jobs, isNum, store } = QW;
 
   const VERDICT = { good: ["red", "比随机有优势"], weak: ["warn", "还不够可信"], bad: ["green", "没有比随机好"], short: ["gray", "留出期太短"] };
   const PARAM_KEYS = ["entry", "trail", "target_r", "max_days", "max_positions", "exit_distribution", "regime"];
@@ -143,6 +143,9 @@
       };
 
       const btStale = computed(() => !!bt.value && !!bt.value.spec && PARAM_KEYS.some((k) => k in form.params && bt.value.spec[k] !== form.params[k]));
+      const btAgeDays = computed(() => (bt.value && bt.value.data_end && store.dataDate
+        ? Math.round((new Date(store.dataDate) - new Date(bt.value.data_end)) / 86400000) : 0));
+      watch(() => props.query && props.query.tpl, (id) => { if (id && home.value && (id !== selTpl.value || selItem.value)) pickTemplate(id); });
       const verdictKey = computed(() => (bt.value ? bt.value.verdict.key : null));
       const accLink = (x) => (x && x.follow && x.follow.account_id ? "#/trade?acc=" + x.follow.account_id : "#/trade");
       const seg = computed(() => (bt.value && bt.value.segments[segTab.value]) || null);
@@ -164,7 +167,7 @@
       });
 
       return { home, err, selTpl, selItem, tpl, item, isMf, mfItem, form, pickTemplate, pickItem, saveItem, runBacktest, bt, btJob, btLoading, toggle,
-        toggleHere, followMf, removeItem, runNow, runJob, segTab, seg, curveOption, pct, cls, isNum, VERDICT, btStale, verdictKey, accLink, detailRef };
+        toggleHere, followMf, removeItem, runNow, runJob, segTab, seg, curveOption, pct, cls, isNum, VERDICT, btStale, verdictKey, accLink, detailRef, btAgeDays };
     },
     template: `<div class="stack">
       <div class="st-flow">
@@ -297,6 +300,7 @@
               <qw-card v-if="btLoading && !bt" title="诚实回测"><qw-skeleton :rows="4"/></qw-card>
               <qw-card v-else-if="bt" title="诚实回测" icon="history" :sub="bt.data_start + ' ~ ' + bt.data_end + ' · 初始资金 ' + $fmt.money(bt.capital) + ' · 随机对照 ' + bt.seeds + ' 次 · 回测于 ' + (bt.saved_at || '')">
                 <template #extra><button class="btn sm ghost" :disabled="!!btJob" @click="runBacktest(true)">重新回测</button></template>
+                <div v-if="btAgeDays > 30" class="gd-note warn" style="margin-bottom:8px"><qw-icon name="alert" :size="15"/><span>这份回测的数据只到 {{ bt.data_end }}，已经过去 {{ btAgeDays }} 天：点“重新回测”用最新数据算一遍，结论可能会变。</span></div>
                 <div v-if="btStale" class="gd-note warn" style="margin-bottom:8px"><qw-icon name="alert" :size="15"/><span>参数改过了：下面是改之前的参数的回测，点“诚实回测”看新参数。</span></div>
                 <div class="st-advice" :class="bt.verdict.credible ? 't-good' : 't-neutral'"><qw-icon name="target" :size="15"/><span>{{ bt.verdict.text }}</span></div>
                 <div class="st-next">

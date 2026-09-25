@@ -153,8 +153,8 @@ class RiskSettings(BaseModel):
     chase_warn_pct: float = Field(5.0, ge=0, le=30)         # 当天已经涨了这么多（%）还要买，需要二次确认
     require_stop: bool = True                               # 买入必须设止损价
     default_stop_pct: float = Field(0.08, ge=0.01, le=0.5)  # 找不到更合适的止损位时，默认买入价下方 8%
-    block_distribution: bool = True                         # 疑似主力出货/下跌阶段的股票禁止买入
-    block_risk_red: bool = True                             # 排雷红灯的股票禁止买入
+    block_distribution: bool = True                         # 买"疑似出货 / 拉升"阶段的股票前提醒（历史上之后一周平均偏弱）；策略中心的策略也据此跳过出货/下跌阶段
+    block_risk_red: bool = True                             # 排雷硬伤（退市/ST/面值和市值退市线/资不抵债/成交极冷/监管处罚）禁止买入；其余红灯只提醒
     warn_average_down: bool = True                          # 给亏损的股票补仓摊平时提醒
     min_amount_20d: float = Field(5e7, ge=0, le=1e11)       # 20日平均成交额下限（元），太小的股票不好卖
 
@@ -290,8 +290,8 @@ FIELD_LABELS: dict[str, str] = {
     "chains": "数据源顺序", "tushare_token": "tushare token", "qmt_path": "QMT 目录",
     "max_single_pct": "单只最多占比", "regime_caps": "大盘环境仓位上限", "daily_loss_limit": "单日亏损上限",
     "cooldown_losses": "连亏几笔冷静", "cooldown_days": "冷静期天数", "chase_warn_pct": "追高提醒涨幅(%)",
-    "require_stop": "必须设止损", "default_stop_pct": "默认止损比例", "block_distribution": "禁买出货阶段",
-    "block_risk_red": "禁买排雷红灯", "warn_average_down": "摊平补仓提醒", "min_amount_20d": "20日均成交额下限",
+    "require_stop": "必须设止损", "default_stop_pct": "默认止损比例", "block_distribution": "出货/拉升阶段提醒",
+    "block_risk_red": "禁买排雷硬伤", "warn_average_down": "摊平补仓提醒", "min_amount_20d": "20日均成交额下限",
     "enabled": "开关", "broker": "券商接口", "auto_policy": "自动下单范围", "max_order_amount": "单笔最大金额",
     "qmt_account": "资金账号", "easytrader_client": "同花顺下单程序", "vnpy_gateway": "vnpy 网关",
     "vnpy_setting": "vnpy 网关参数", "channels": "推送渠道", "pushplus_token": "PushPlus token",

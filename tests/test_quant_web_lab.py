@@ -258,7 +258,11 @@ def test_lab_api(client, base, monkeypatch: pytest.MonkeyPatch) -> None:
     d = client.get(f"/api/lab/runs/{s['id']}").json()
     assert d["summary"]["id"] == s["id"] and d["evaluation"]["verdict"]["text"]
     assert client.get("/api/lab/runs/bad..id").status_code == 400
-    assert client.post(f"/api/lab/runs/{s['id']}/enable").json()["enabled"] is True
+    en = client.post(f"/api/lab/runs/{s['id']}/enable")
+    if not d["evaluation"]["verdict"].get("credible"):                  # 样本外没有优势的模型要明确确认才能启用
+        assert en.status_code == 400 and "样本外" in en.json()["detail"]
+        en = client.post(f"/api/lab/runs/{s['id']}/enable", json={"ack": True})
+    assert en.json()["enabled"] is True
     monkeypatch.setattr(history, "last_date", lambda: base[0]["date"].max())
     sc = client.get("/api/lab/scores").json()
     assert sc["enabled"] == s["id"] and not sc["stale"] and len(sc["rows"]) == 40

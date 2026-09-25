@@ -15,7 +15,7 @@ from typing import Any
 
 import polars as pl
 
-from .. import net
+from .. import config, net
 from .base import SCHEMAS, DataProvider, Unavailable
 
 
@@ -177,7 +177,7 @@ class EmDatacenterProvider(DataProvider):
 
         from ..market import realtime
 
-        candidates: list[date] = realtime.recent_trading_days(8, until=date.today())[::-1]
+        candidates: list[date] = realtime.recent_trading_days(8, until=datetime.now(config.CHINA_TZ).date())[::-1]
         errors: list[str] = []
         for d in candidates:
             try:

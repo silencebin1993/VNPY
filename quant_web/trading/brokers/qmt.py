@@ -134,17 +134,22 @@ class QmtBroker(Broker):
         if req.kind in ("stop", "take_profit"):
             return place(conn, self.account["id"], req, ref_price=ref_price)    # 条件单等触发，不发给券商
         order: dict = place(conn, self.account["id"], req, ref_price=ref_price, status="submitted")
-        try:
+        try:                                                         # 发出去之前出错：确定没有下单
             price: float = _order_price(req, ref_price, self.settings)
             c: _Client = self._client()
             side = c.xtconstant.STOCK_BUY if req.side == "buy" else c.xtconstant.STOCK_SELL
-            result = c.trader.order_stock(c.account, f"{req.code}.{exchange_suffix(req.code)}", side, int(req.qty),
-                                          c.xtconstant.FIX_PRICE, price, "quant_web", (req.reason or "")[:20])
-            if result is None or result < 0:
-                raise ConnectionError(f"miniQMT 下单被拒绝（返回码 {result}）")
         except Exception as e:                                       # noqa: BLE001  券商/网络异常种类不可控
             self.mark_rejected(conn, order["id"], f"券商下单失败：{e}")
             ledger.alert(conn, self.account["id"], req.code, "urgent", "broker", "QMT 下单失败", str(e))
+            return ledger.one(conn, "SELECT * FROM orders WHERE id=?", (order["id"],))          # type: ignore[return-value]
+        try:
+            result = c.trader.order_stock(c.account, f"{req.code}.{exchange_suffix(req.code)}", side, int(req.qty),
+                                          c.xtconstant.FIX_PRICE, price, "quant_web", (req.reason or "")[:20])
+        except Exception as e:                                       # noqa: BLE001  发送时出错：券商可能已经收到
+            return self.mark_uncertain(conn, self.account["id"], order["id"], req.code, f"QMT 下单时出错（{e}）")
+        if result is None or result < 0:                             # 明确的拒绝
+            self.mark_rejected(conn, order["id"], f"券商下单失败：miniQMT 下单被拒绝（返回码 {result}）")
+            ledger.alert(conn, self.account["id"], req.code, "urgent", "broker", "QMT 下单失败", f"返回码 {result}")
             return ledger.one(conn, "SELECT * FROM orders WHERE id=?", (order["id"],))          # type: ignore[return-value]
         conn.execute("UPDATE orders SET broker_order_id=? WHERE id=?", (str(result), order["id"]))
         ledger.audit(conn, self.account["id"], "broker_place", {"order_id": order["id"], "broker_order_id": result})

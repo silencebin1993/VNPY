@@ -331,7 +331,7 @@
       <template v-else>
         <div class="rg-head">
           <span class="rg-badge" :class="'t-' + data.tone">{{ data.label }}</span>
-          <div class="rg-cap">建议总仓位不超过 <b class="num">{{ pct(data.cap, 0) }}</b></div>
+          <div class="rg-cap" v-tip="'你在交易设置里设的上限，控制波动用的经验规则，不是涨跌预测。量化选股的周组合不按它减仓（回测里减仓反而更差）'">仓位上限（经验规则）<b class="num">{{ pct(data.cap, 0) }}</b></div>
           <div class="muted rg-advice">{{ data.advice }}</div>
         </div>
         <div class="rg-comps">
@@ -502,7 +502,7 @@
         <div v-if="night" class="dt-night">
           <div class="muted" style="font-size:12px">基于 {{ night.date }} 收盘 · 生成于 {{ night.generated_at }}</div>
           <div class="dt-big"><b :class="actions ? 'down' : ''">{{ actions }}</b> 只持仓要处理 · <b>{{ night.candidates.length }}</b> 只候选</div>
-          <div v-if="night.regime" class="muted" style="font-size:12.5px">大盘{{ night.regime.label }}，总仓位建议不超过 {{ fmt.ratio(night.regime.cap, 0) }}</div>
+          <div v-if="night.regime" class="muted" style="font-size:12.5px">大盘{{ night.regime.label }}，仓位上限（经验规则，不是预测）{{ fmt.ratio(night.regime.cap, 0) }}</div>
         </div>
         <qw-empty v-else compact icon="calendar" title="还没有明日计划" desc="每个交易日收盘、每日更新完成后自动生成。"/>
       </qw-card>
