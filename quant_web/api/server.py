@@ -533,6 +533,13 @@ def _warmup() -> None:
         log.info("预热失败：%s", e)
 
 
+def _monitor(action: str) -> None:
+    try:
+        getattr(mod("trading.monitor"), action)()
+    except Exception as e:  # noqa: BLE001  监控起不来不影响网页
+        log.warning("盘中监控 %s 失败：%s", action, e)
+
+
 def create_app(background: bool | None = None) -> FastAPI:
     """background=True：启动每日自动更新线程 + 后台预热；False：两者都不启动（测试用）。
     None（默认）：总是预热，自动更新线程可用环境变量 QUANT_WEB_NO_SCHEDULER=1 关闭。"""
@@ -545,11 +552,13 @@ def create_app(background: bool | None = None) -> FastAPI:
         config.ensure_dirs()
         if background:
             scheduler_mod.start()
+            _monitor("start")           # 盘中监控（交易时段才干活；设置里可关）
         if warmup:
             threading.Thread(target=_warmup, name="quant-web-warmup", daemon=True).start()
         yield
         if background:
             scheduler_mod.stop()
+            _monitor("stop")
 
     app = FastAPI(
         title="量化助手", version=__version__, lifespan=lifespan, default_response_class=SafeJSONResponse,

@@ -132,4 +132,24 @@ def _screener_backtest(params: dict, progress: Progress) -> Any:
     return {"key": key, "verdict": res["verdict"]}
 
 
+@task("assistant_daily", "投资助手每日流水线", group=HEAVY,
+      description="大盘环境、扩展数据、每天的选股方案、交易日终、明日计划（交易日收盘更新数据后会自动跑）")
+def _assistant_daily(params: dict, progress: Progress) -> Any:
+    from .assistant import daily
+    return daily.run(progress=progress)
+
+
+@task("trading_eod", "交易日终处理", group=HEAVY, description="模拟盘按日线撮合、除权、移动止盈、资产快照；实盘同步成交")
+def _trading_eod(params: dict, progress: Progress) -> Any:
+    from .trading import service
+    return service.run_eod(progress=progress)
+
+
+@task("nightly_plan", "生成明日计划", description="持仓怎么做、条件单清单、候选买入")
+def _nightly(params: dict, progress: Progress) -> Any:
+    from .trading import nightly
+    n = nightly.build()
+    return {"date": n["date"], "accounts": len(n["accounts"]), "candidates": len(n["candidates"])}
+
+
 __all__ = ["EXT", "HEAVY", "TASKS", "TaskSpec", "formula_params", "job_name", "listing", "submit", "task"]

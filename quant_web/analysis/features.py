@@ -41,7 +41,7 @@ def compute(frame: pl.DataFrame, chips: pl.DataFrame | None = None, rps: bool = 
         return frame
     df: pl.DataFrame = frame
     ctx = Ctx(df["code"])
-    O, H, L, C = (df[c].cast(pl.Float64) for c in ("open", "high", "low", "close"))
+    OP, H, L, C = (df[c].cast(pl.Float64) for c in ("open", "high", "low", "close"))
     V: pl.Series = df["volume"].cast(pl.Float64)
     ref = lambda x, n: F.ref(x, n, ctx)                          # noqa: E731
     ma = lambda x, n: F.ma(x, n, ctx)                            # noqa: E731
@@ -58,7 +58,7 @@ def compute(frame: pl.DataFrame, chips: pl.DataFrame | None = None, rps: bool = 
     lo250, hi250 = llv(L, 250), hhv(H, 250)
     out["pos250"] = sdiv(C - lo250, hi250 - lo250)
     out["range30"] = sdiv(hhv(H, 30), llv(L, 30)) - 1
-    ohlcv = {"open": O, "high": H, "low": L, "close": C, "volume": V}
+    ohlcv = {"open": OP, "high": H, "low": L, "close": C, "volume": V}
     atr = {k: s for k, _, s, _ in ta.atr(ohlcv, ctx)}["atr"]
     out["atr_ratio50"] = sdiv(atr, ref(atr, 50))
     pc = ref(C, 1)
@@ -76,9 +76,9 @@ def compute(frame: pl.DataFrame, chips: pl.DataFrame | None = None, rps: bool = 
     out["dd20"] = sdiv(C, hc20) - 1
     out["rise_low120"] = sdiv(C, llv(L, 120)) - 1
     out["bias20"] = sdiv(C, out["ma20"]) - 1
-    out["black_vol5"] = exist((C < O * 0.96) & (V > mav20 * 1.8), 5)
+    out["black_vol5"] = exist((C < OP * 0.96) & (V > mav20 * 1.8), 5)
     rng = H - L
-    lower_shadow = sdiv(F.min_(O, C, ctx) - L, rng)
+    lower_shadow = sdiv(F.min_(OP, C, ctx) - L, rng)
     out["low_shadow5"] = exist((lower_shadow > 0.5) & (rng > 0), 5)
     brk_up = ((C > ref(hhv(H, 60), 1)) & (V > mav20 * 1.5)).fill_null(False)
     out["breakout5"] = exist(brk_up, 5)
@@ -86,7 +86,7 @@ def compute(frame: pl.DataFrame, chips: pl.DataFrame | None = None, rps: bool = 
     out["newhigh5"] = exist((C >= hhv(C, 60)).fill_null(False), 5)
     ma5, ma10, ma20, ma60 = out["ma5"], out["ma10"], out["ma20"], out["ma60"]
     out["ma_bull"] = ((ma5 > ma10) & (ma10 > ma20) & (ma20 > ma60) & (ma20 > ref(ma20, 1))).fill_null(False)
-    upper_shadow = sdiv(H - F.max_(O, C, ctx), rng)
+    upper_shadow = sdiv(H - F.max_(OP, C, ctx), rng)
     mav60 = ma(V, 60)
     # 放量用 60 日均量衡量：连续几天巨量后 20 日均量被抬高，只和 20 日均量比会漏掉后面的滞涨日
     stall = (out["pos250"] > 0.75) & (V > mav60 * 1.8) & ((sdiv(C, pc) - 1).abs() < 0.02) & (upper_shadow > 0.4)
@@ -98,7 +98,7 @@ def compute(frame: pl.DataFrame, chips: pl.DataFrame | None = None, rps: bool = 
     out["div10"] = exist(div.fill_null(False), 10)
     brk = (C < ma20) & (pc >= ref(ma20, 1)) & (V > mav60 * 1.2)          # 同样用 60 日均量衡量"带量"
     out["brk10"] = exist(brk.fill_null(False), 10)
-    out["top10"] = exist(((V >= hhv(V, 120)) & (C < O)).fill_null(False), 10)
+    out["top10"] = exist(((V >= hhv(V, 120)) & (C < OP)).fill_null(False), 10)
     out["bear_ma"] = ((ma5 < ma10) & (ma10 < ma20) & (ma20 < ma60)).fill_null(False)
     lo10 = llv(L, 10)
     out["lower_lows"] = (lo10 < ref(lo10, 10)).fill_null(False)

@@ -271,5 +271,5 @@ def run(scheme: dict, *, as_of: date | None = None, profile: dict | None = None,
         "conditions_text": [describe_condition(c) for c in scheme["conditions"]],
         "capital": capital, "risk_per_trade": rpt,
         "note": "选出来的是“符合条件、按打分排在前面”的股票，不是买入保证。先看方案的历史回测是否跑赢随机，再逐只看诊断；"
-                "建议股数按“一笔最多亏总资金 {:.1f}%”和止损价算出，买之前再确认。".format(rpt * 100),
+                f"建议股数按“一笔最多亏总资金 {rpt * 100:.1f}%”和止损价算出，买之前再确认。",
     }

@@ -78,7 +78,7 @@ def chips_for(code: str, bars: list[dict]) -> dict | None:
             fac: list = mod("indicators.adjust").add_qfq(df, by=None).get_column("adj_factor").to_list()
             series: dict = res["series"]
             for k in PRICE_STATS:
-                series[k] = [None if v is None or f is None else round(v * f, 4) for v, f in zip(series[k], fac)]
+                series[k] = [None if v is None or f is None else round(v * f, 4) for v, f in zip(series[k], fac, strict=True)]
             return {"dates": [str(d) for d in df.get_column("date").to_list()], "series": series,
                     "dist": res["dist"], "last": res["last"], "as_of": str(df.get_column("date")[-1])}
         full: dict = CACHE.get(("chips", code), build, ttl=600, sig=panel_sig())

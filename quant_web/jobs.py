@@ -8,6 +8,7 @@
   限时 CALIBRATE_TIMEOUT 秒，没查完的下次接着查；失败不影响任务结果）。
 """
 import json
+import os
 import logging
 import sys
 import threading
@@ -434,6 +435,13 @@ def run_daily(progress: Progress | None = None) -> Any:
     cal: dict | None = calibrate_weekly(progress)
     if cal is not None and isinstance(result, dict):
         result["calibrate"] = cal
+    # 第三版：投资助手（大盘环境、扩展数据、选股、交易日终、明日计划）。单独出错不影响上面的结果
+    if isinstance(result, dict) and os.environ.get("QUANT_WEB_NO_ASSISTANT", "").lower() not in ("1", "true", "yes"):
+        try:
+            from .assistant import daily as assistant_daily
+            result["assistant"] = assistant_daily.run(progress=scaled(progress, 0.0, 1.0) if progress else None)
+        except Exception as e:  # noqa: BLE001
+            result["assistant"] = {"errors": [friendly_error(e)]}
     return result
 
 

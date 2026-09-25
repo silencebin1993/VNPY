@@ -72,7 +72,7 @@ class ChipEngine:
         tmp.replace(path)
 
     @classmethod
-    def load(cls, path: Path) -> "ChipEngine":
+    def load(cls, path: Path) -> ChipEngine:
         eng = cls()
         with np.load(path, allow_pickle=False) as z:
             eng.codes = [str(c) for c in z["codes"]]
@@ -97,7 +97,7 @@ class ChipEngine:
         prev: np.ndarray = self.last_close[rows]
         ratio: np.ndarray = np.where((pre > 0) & (prev > 0), pre / prev, 1.0)
         shift_mask: np.ndarray = self.alive[rows] & (np.abs(ratio - 1.0) > 1e-4)
-        for r, f in zip(rows[shift_mask], ratio[shift_mask]):
+        for r, f in zip(rows[shift_mask], ratio[shift_mask], strict=True):
             self._shift(int(r), float(f))
 
         ok: np.ndarray = (vol > 0) & (high > 0) & (low > 0) & (high >= low) & np.isfinite(close)
@@ -215,7 +215,7 @@ def compute_panel(panel: pl.DataFrame, want: set | None = None, engine: ChipEngi
             if alive.any():
                 s: dict = eng.stats(all_rows[alive], close[alive])
                 frames.append(pl.DataFrame({"date": [d] * int(alive.sum()),
-                                            "code": [c for c, a in zip(codes, alive) if a],
+                                            "code": [c for c, a in zip(codes, alive, strict=True) if a],
                                             **{k: s[k] for k in STAT_COLS}}))
         if progress is not None and len(days) > 20 and i % 20 == 0:
             progress(i / len(days), f"筹码分布：{i}/{len(days)} 天")

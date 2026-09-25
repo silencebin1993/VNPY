@@ -120,6 +120,9 @@
         } catch (e) { /* 已提示 */ }
       };
       const addWatch = (r) => QW.watch.toggle(r.code, r.name).catch(() => {});
+      // 去交易页下单：带上建议止损、股数和理由（下单前还会再做一遍风控检查）
+      const tradeLink = (r) => "#/trade?" + new URLSearchParams({ code: r.code, name: r.name || "", side: "buy", stop: r.stop || "", qty: r.shares || "",
+        reason: `选股器：${(draft.value && draft.value.name) || ""}` }).toString();
 
       const btOption = computed(() => {
         const b = bt.value;
@@ -149,7 +152,7 @@
       return {
         store, fmt, meta, loading, err, schemes, selId, current, pick, draft, dirty, editOpen, fieldOpts, fieldInfo, dispVal, setVal, onOp,
         addCond, delCond, toggleIn, boardsOf, toggleBoard, noPerm, amtYi, scoringOpts, termOpts, setWeight, run, running, result, runErr,
-        save, remove, bt, btJob, btLoading, backtest, btOption, pct, cls, addWatch, regime, BOARD_OPTS, STAGE_TONE, RISK_TAG, isNum,
+        save, remove, bt, btJob, btLoading, backtest, btOption, pct, cls, addWatch, tradeLink, regime, BOARD_OPTS, STAGE_TONE, RISK_TAG, isNum,
       };
     },
     template: `<div class="fm-layout">
@@ -260,6 +263,7 @@
               <div class="num" v-tip="row.size_note">{{ row.shares ? row.shares + ' 股 · ' + $fmt.money(row.amount) : '不买' }}</div></template>
             <template #cell-reasons="{row}"><span class="sc-reason">{{ row.reasons || '—' }}</span><div v-if="row.risk_reasons" class="muted" style="font-size:12px">注意：{{ row.risk_reasons }}</div></template>
             <template #cell-act="{row}"><span class="row" style="flex-wrap:nowrap;gap:4px"><a class="btn sm" :href="'#/watch/' + row.code">诊断</a>
+              <a v-if="row.shares" class="btn sm" :href="tradeLink(row)" v-tip="'去交易页：已填好建议止损和股数，下单前会再做一遍风控检查'">下单</a>
               <button class="qw-iconbtn sm" @click="addWatch(row)" v-tip="'加入/移出自选'"><qw-icon :name="store.watchCodes.includes(row.code) ? 'starFill' : 'star'" :size="14"/></button></span></template>
           </qw-table>
           <qw-empty v-else compact icon="filter" title="今天没有股票满足这个方案" desc="可以放宽条件，或者今天就不买——没有合适的就空仓，也是一种操作。"/>

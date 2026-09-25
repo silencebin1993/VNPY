@@ -125,7 +125,7 @@ class Evaluator:
         if isinstance(node, ast.Compare):
             left: Val = self.ev(node.left, env)
             result: pl.Series | None = None
-            for op, comp in zip(node.ops, node.comparators):
+            for op, comp in zip(node.ops, node.comparators, strict=True):
                 right: Val = self.ev(comp, env)
                 cmp: pl.Series = self._compare(op, _num(left, self.n), _num(right, self.n))
                 result = cmp if result is None else (result & cmp)
@@ -276,7 +276,7 @@ class Evaluator:
         elif q >= 95:
             raw = ch["p95"]
         else:
-            for (q0, c0), (q1, c1) in zip(pts, pts[1:]):
+            for (q0, c0), (q1, c1) in zip(pts, pts[1:], strict=False):
                 if q0 <= q <= q1:
                     w = (q - q0) / (q1 - q0)
                     raw = ch[c0] * (1 - w) + ch[c1] * w

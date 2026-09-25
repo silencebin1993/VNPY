@@ -4,7 +4,8 @@
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+import threading
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
@@ -71,7 +72,7 @@ def volume_price_summary(row: dict) -> list[dict]:
 
 def _segments(dates: list, stages: list[str]) -> list[dict]:
     segs: list[dict] = []
-    for d, s in zip(dates, stages):
+    for d, s in zip(dates, stages, strict=True):
         if segs and segs[-1]["stage"] == s:
             segs[-1]["end"] = str(d)
             segs[-1]["days"] += 1
@@ -125,3 +126,97 @@ def diagnose(code: str, rps: pl.DataFrame | None = None, flow: list[dict] | None
         "note": "阶段判断是事先定好的经验规则（没有用历史数据调参），只能说明“像不像”，不能确定主力真实意图；"
                 "每个阶段之后的真实表现以历史验证为准。",
     }
+
+
+# ---------------------------------------------------------------- 完整诊断（接口和下单预览共用；按日线文件签名缓存）
+
+_cache: dict = {}
+_cache_lock = threading.Lock()
+
+
+def _stamp() -> str:
+    from .market import _panel_stamp
+    return _panel_stamp()
+
+
+def rps_cached() -> pl.DataFrame:
+    from ..market import history
+
+    key = ("rps", _stamp())
+    with _cache_lock:
+        if key in _cache:
+            return _cache[key]
+    last = history.last_date()
+    tbl = rps_recent(last) if last else pl.DataFrame(schema={"code": pl.Utf8, "date": pl.Date, "rps120": pl.Float64})
+    with _cache_lock:
+        _cache.clear() if len(_cache) > 400 else None
+        _cache[key] = tbl
+    return tbl
+
+
+def _news_titles(name: str | None, code: str) -> list[tuple[str, str]] | None:
+    try:
+        from ..market import news
+        store: pl.DataFrame = news._load_store()                          # noqa: SLF001  只读本地缓存，不联网
+    except Exception:  # noqa: BLE001
+        return None
+    if store.is_empty() or "title" not in store.columns:
+        return []
+    keys = [k for k in (name, code) if k]
+    text = (pl.col("title").fill_null("") + pl.col("content").fill_null("")) if "content" in store.columns else pl.col("title")
+    hits = store.filter(pl.any_horizontal([text.str.contains(k, literal=True) for k in keys])) if keys else store.head(0)
+    tcol = "time" if "time" in hits.columns else hits.columns[0]
+    return [(str(r["title"]), str(r.get(tcol) or "")[:10]) for r in hits.head(50).to_dicts()]
+
+
+def full(code: str, use_cache: bool = True) -> dict:
+    """个股完整诊断：主力阶段 + 排雷 + 参考信息（资金流、股东户数）+ 名称。5 分钟内、日线没变时走缓存"""
+    from ..market import universe as uni_mod
+    from . import riskscan
+
+    key = ("full", code, _stamp())
+    now = datetime.now().timestamp()
+    if use_cache:
+        with _cache_lock:
+            hit = _cache.get(key)
+        if hit and now - hit[0] < 300:
+            return hit[1]
+    flow = None
+    try:
+        from ..providers.base import registry
+        res = registry().fetch("fund_flow", code=code)
+        flow = res.data.to_dicts() if res.data.height else None
+    except Exception:  # noqa: BLE001  资金流只是参考信息
+        flow = None
+    holders = None
+    try:
+        from ..providers import store
+        hc = store.load("holder_count")
+        holders = hc.filter(pl.col("code") == code) if hc.height else None
+    except Exception:  # noqa: BLE001
+        holders = None
+    d = diagnose(code, rps=rps_cached(), flow=flow, holders=holders)
+    uni = uni_mod.load_universe()
+    row = uni.filter(pl.col("code") == code) if uni.height else uni
+    name = row["name"][0] if row.height and "name" in row.columns else None
+    list_date = row["list_date"][0] if row.height and "list_date" in row.columns else None
+    float_cap = total_cap = None
+    try:
+        from ..market import realtime
+        q = realtime.quotes([code])
+        q0 = q[0] if q else {}
+        float_cap, total_cap = q0.get("float_cap"), q0.get("total_cap")
+    except Exception:  # noqa: BLE001  实时行情取不到时市值一项显示"没有数据"
+        pass
+    try:
+        from ..market import fundamentals
+        fund = fundamentals.load_fundamentals()
+    except Exception:  # noqa: BLE001
+        fund = None
+    from ..config import CHINA_TZ
+    d["risk"] = riskscan.scan_stock(code, name, datetime.now(CHINA_TZ).date(), d.get("last_bar"), list_date, fund,
+                                    d["stage"]["key"], float_cap=float_cap, total_cap=total_cap, news_titles=_news_titles(name, code))
+    d["name"] = name
+    with _cache_lock:
+        _cache[key] = (now, d)
+    return d

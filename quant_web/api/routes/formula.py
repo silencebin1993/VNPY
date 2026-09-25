@@ -117,7 +117,7 @@ def formula_preview(
         if s.dtype == pl.Boolean:
             continue
         outputs[name] = [None if v is None else round(float(v), 4) for v in s.to_list()]
-    signals: list[str] = [d for d, v in zip(dates, res.condition.to_list()) if v] if res.condition is not None else []
+    signals: list[str] = [d for d, v in zip(dates, res.condition.to_list(), strict=True) if v] if res.condition is not None else []
     return ok({**_meta(prog), "code": code, "dates": dates, "series": outputs, "signals": signals})
 
 

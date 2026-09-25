@@ -608,3 +608,117 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
   - GET `/api/screener/backtest/{key}`、GET `/api/screener/latest/{id}`。
 - 前端 `pages/screener.js`（`#/screener`，分组"选股"，手机底部 tab）：
   - 左侧为方案列表；右侧依次是：大盘提示、条件编辑器（范围/条件/排雷/打分/数量）、结果表（阶段、排雷、止损/股数、理由、诊断、自选）、回测（曲线、选择期/留出期表）。
+- 补充（2026-09-25，回测之后）：`PRESETS` 现为 6 个，顺序 reversal_value（默认，反转 + 低估值 + 低换手）、trend_swing、mainforce_follow、washout_dip、value_growth、breakout；
+  trend_swing 已去掉"推荐"（真实数据回测年化 −21%、最大回撤 −90%，明显差于同日随机）。每个方案的说明都写明回测结论；没有一个方案显著跑赢随机。
+  结果表每行多一个"下单"按钮 → `#/trade?code=&name=&side=buy&stop=&qty=&reason=`（交易页会重新做风控检查）。
+
+### 8.12 交易核心 `quant_web/trading/`（P6）
+- 账本 `ledger.py`：SQLite `workspace/trading/trading.db`。
+  - 表：accounts / orders / fills / positions / plans / equity / journal / audit（只追加）/ alerts / meta。
+  - `connect()` 同一线程内嵌套调用复用同一个连接（避免自己等自己的写锁），最外层退出时提交或回滚。
+  - `create_account(name, kind=paper|live, broker, initial_cash)`、`get_account`（不存在 → ValueError）、`list_accounts`、`reset_paper`（只限模拟盘）、`archive_account`、`get_meta/set_meta`、`audit`、`alert`。
+- 成交规则 `rules.py`（模拟盘和回测共用一份）：
+  - `fees(side, amount, day)`：佣金万 2.5、最低 5 元；印花税按日期（2023-08-28 起卖出 0.05%）；过户费。
+  - `check_qty`：买入整手（科创板 200 股起）；卖出整手或一次卖完零股。
+  - `match_bar / match_quote`：一字涨停买不进、跌停封死卖不出、停牌不成交；限价按"开盘价更优就用开盘价"；止损/止盈条件单跳空时按开盘价。
+  - `ex_rights(prev_close, preclose)`：送转按股数、分红按现金处理。
+- 引擎 `engine.py`：`OrderRequest(code, side, qty, kind=limit|market|stop|take_profit, price, trigger, valid=day|gtc, name, reason, plan_id, source, flags)`。
+  - `place` 买单冻结资金；卖单（limit/market）检查可卖 = 可用 − 已挂卖单；条件单只能卖出。
+  - `apply_fill`：扣费、T+1（当天买入 available=0）、部分成交、全部卖完时写复盘并结束计划。
+  - `match_with_bars`（日终）/ `match_with_quotes`（盘中）：卖出数量不超过当时可卖股数。
+  - `apply_ex_rights`（撮合前）、`settle_day`（可卖数量解冻、收盘价、资产快照）、`snapshot`、`expire_day_orders`。
+- 交易计划 `plans.py`：每笔买入都有计划（止损必填、目标、`TRAIL_RULES` 移动止盈、最长持有天数、理由）。
+  - 成交后生效，并挂一张程序内的止损条件单：模拟盘由撮合触发；实盘由盘中监控盯着，券商那边没有这笔单。
+  - `update_stop` 往下挪止损必须 `allow_lower=True`，并记为违规"挪低过止损"。
+  - `evaluate_close` 收盘评估：移动止盈上移止损、跌破均线离场信号、到目标、超期。
+  - `on_position_closed` 写 journal，含 R 倍数、持有天数和违规列表。
+- 风控 `risk.py`：`check(conn, account, req, ctx) -> {blocked, need_confirm, items:[{level: block|confirm|warn|info, code, message}]}`。
+  - 检查项：实盘开关、单笔金额、价格涨跌停、价格笼子、板块权限、整手、必须止损、现金、单笔风险、单只上限、大盘仓位上限、追高、涨停价、主力阶段、排雷红灯、亏损补仓、当天亏损熔断、连亏冷静期、自动买入、可卖数量、目标价低于买价。
+- 券商接口 `brokers/`：注册表 `BROKERS`，`get_broker(account, settings)`、`listing(settings)` 返回可用性和中文原因。
+  - `base.Broker`：available / status / place / cancel / sync / `book_trade`。券商同步时记不进账的成交（例如在别处卖出了账本里没有的股票）只提醒一次（meta `sync_skip:*`），不卡住后面的成交。
+  - `paper`：模拟盘。
+  - `manual`：实盘-手动。委托状态为 pending_manual，用 `confirm_fill` 回填成交；`parse_statement/import_statement` 识别同花顺、通达信、东财交割单（UTF-8/GBK），按成交编号去重。
+  - `qmt`：miniQMT，通过 xtquant。
+  - `easytrader`：同花顺客户端，实验性，无法同步撤单或拒单。
+  - `vnpy_gateway`：桥接任意 vnpy 网关，实验性。
+  - 三个自动接口都遵守：市价单和触发后的条件单改用保护性限价（卖出按参考价 98%、不低于跌停；买入 102%、不高于涨停）。先写账本；发单失败则把委托标为 rejected 并发紧急提醒，绝不抛出。这三个接口只在开发期用假模块测过，要用真实账户实测。
+- 服务层 `service.py`（网页、监控线程、每日流水线都经过这里）：
+  - `preview(account_id, order, plan)`：风控检查、行情、主力阶段、排雷、建议止损、按风险算股数、目标价 = 买价 + 2 倍止损幅度。
+  - `submit(..., acknowledge)`：有禁止项直接报错；有"需确认"项但没确认也报错。flags 记录追高、补仓和确认过的风险。买入先建计划。自动接口在非交易时段下的单状态为 queued，开盘后提交。
+  - `cancel`：queued 和程序内条件单在本地撤，其余通过券商撤。`confirm_fill`、`import_statement`、`update_plan`。
+  - `run_eod(day)`：
+    - 模拟盘：除权 → 日线撮合；
+    - 实盘：同步成交，失败只记在摘要里；
+    - 所有账户：计划收盘评估；模拟盘出现离场信号时，下一个交易日挂市价卖单，数量扣掉已挂卖单；
+    - 资产快照，最后推送摘要。
+  - `run_intraday(now)`，只在交易时段执行：
+    - 模拟盘：实时撮合。
+    - 实盘各步单独兜底，顺序如下：
+      1. 止损：只在连续竞价时判断，集合竞价的虚拟价不算。同一计划每天只提醒一次。若设置允许且接口能自动下单，自动提交保护性卖单，数量 = 可卖 − 已挂卖单；已有卖单挂着、自动卖失败或被拒时，改发紧急提醒"请立即手动卖出"。
+      2. 提交排队委托：失败则写原因并发紧急提醒。
+      3. 同步成交。
+    - 持仓、挂单和自选的异动提醒：5 分钟内涨跌超过设定值，同一只 30 分钟内只提醒一次。
+  - `kill_switch()`：关闭实盘开关，撤掉所有实盘账户未成交委托（排队中、待手动、已报），写审计。
+- 交易日历 `calendar.py`：`session(now)` 返回 pre / auction / pre_open / open / noon / closed / holiday。`order_trade_date`：收盘后或休市时下的单属于下一个交易日。
+
+### 8.13 提醒推送 `quant_web/notify/`（P6）
+- `send(title, body, level=info|warn|urgent, kind, code, account_id)`：
+  - 站内信（alerts 表）一直写。
+  - 其他渠道：达到 `notify.min_level` 且不在免打扰时段（urgent 不受限制）时，推送到 PushPlus、Server酱、邮件（SMTP SSL）。
+  - 推送失败只记日志。
+- `test_channel(channel)`：给"发送测试"按钮用，返回 `{ok, message}`。
+
+### 8.14 盘中监控、明日计划、复盘（P6）
+- `monitor.py`：
+  - `Monitor(now_fn, tick_fn, enabled_fn)` 线程，每隔 `monitor.interval_sec`（≥10 秒）检查一次；非交易时段只等待。
+  - 全局 `MONITOR`，`start/stop`。server.py 的 lifespan 在 background=True 时启停它，和 scheduler 互不影响。
+  - `status()` 返回 running / enabled / last_tick / last_error / ticks。
+- `nightly.py`：`build(day)` 生成明日计划，存到 `workspace/trading/nightly/{日期}.json`；`latest()` 读最近一份。内容：
+  - 大盘环境。
+  - 每个账户每只持仓明天怎么做：跌破止损 → 开盘卖；疑似出货 → 减仓/上移止损；到目标 → 部分止盈；超期 → 考虑离场。
+  - 实盘账户的"券商 App 条件单清单"（止损，以及先卖一半的可选止盈）。
+  - 候选买入：取 `settings.assistant.screeners`（默认 reversal_value）最新结果的前几名，需要人工确认。
+- `review.py`：`trades(account_id)`、`stats(account_id)`。
+  - 统计：胜率、总盈亏、平均盈亏、盈亏比、平均 R、平均持有天数、最长连亏、守纪律比例。
+  - 人性陷阱：挪低过止损、追高、补仓摊平、超期持有、无视风控、没有计划，附 `TRAP_TEXT` 白话解释。
+
+### 8.15 每日"投资助手"流水线 `quant_web/assistant/daily.py`（P6）
+- 调用方式：`jobs.run_daily` 在原流程末尾追加 `assistant_daily.run()`，结果放进 `result["assistant"]`。单独 try/except，不影响原来的更新和预测。环境变量 `QUANT_WEB_NO_ASSISTANT=1` 可以关掉（tests/conftest.py 默认关）。
+- 步骤（每步单独兜底，出错只记在 `errors`）：
+  1. 大盘环境。
+  2. 扩展数据：持仓 + 自选 + 候选的资金流、指数日线每天更新；其余扩展数据每 7 天一次（meta `ext_full_update`）。
+  3. 每天自动运行的选股方案，并保存结果。
+  4. 交易日终 `service.run_eod`。
+  5. 明日计划，并推送摘要。
+- 后台任务白名单新增：`assistant_daily`、`trading_eod`、`nightly_plan`。
+
+### 8.16 交易接口与页面（P6）
+- 接口（`api/routes/trading.py`）：
+  - 券商与监控：
+    - GET `/api/trading/brokers`：返回 {brokers, trail_rules, live（不含 vnpy_setting）, monitor}。
+    - GET `/api/trading/monitor`。
+  - 账户：
+    - GET/POST `/api/trading/accounts`：列表带总资产和收益。
+    - GET `/api/trading/accounts/{id}?refresh=`：快照 + 委托 + 成交 + 生效计划 + 资产曲线；交易时段用实时价刷新市值。
+    - POST `.../{id}/reset`、DELETE `.../{id}`（归档）。
+  - 委托与计划：
+    - POST `/api/trading/preview {account_id, order, plan}`。
+    - POST `/api/trading/orders {account_id, order, plan, acknowledge}`。
+    - POST `/api/trading/orders/{id}/cancel {account_id}`。
+    - POST `/api/trading/orders/{id}/fill {account_id, qty, price}`。
+    - POST `/api/trading/import {account_id, text}`，最多 5 MB。
+    - PUT `/api/trading/plans/{id} {account_id, stop, target, trail, allow_lower, note}`。
+  - 明日计划与复盘：GET `/api/trading/nightly?rebuild=`、GET `/api/trading/review/{account_id}`。
+  - 提醒：GET `/api/alerts?unread=&limit=`、POST `/api/alerts/read {ids?}`、POST `/api/notify/test {channel}`。
+  - 一键停止：POST `/api/trading/kill`。
+  - 业务错误（风控禁止、需要确认、往下挪止损等）返回 400 `{"detail": 中文}`。
+- 前端 `pages/trade.js`（`#/trade`，分组"交易"，手机底部 tab；原来"自选股"的底部 tab 移到"更多 → 行情"）：
+  - 顶栏：账户下拉框（记在 localStorage）、新建账户、实盘开关状态、盘中监控状态，有实盘时显示"一键停止实盘"。
+  - 标签页：
+    - 账户与持仓：统计、持仓（计划止损/目标、改计划、卖出、诊断）、委托（撤单；手动账户可点"我已成交"）、资产曲线、最近成交、导入交割单。
+    - 下单：搜股票后自动填现价、建议止损、股数、目标。点"检查风控"逐条列出（禁止 / 需要你确认 / 提醒 / 说明），并显示主力阶段、排雷和按风险算的仓位。需确认的项必须勾选；改过内容要重新检查才能下单。
+    - 明日计划：持仓动作、条件单清单（可复制）、候选买入（去下单）。
+    - 提醒：未读数显示在标签上。
+    - 复盘：统计、人性陷阱、每笔交易。
+    - 交易设置：实盘（总开关二次确认；接口可用性；止损自动卖出只提供 stop_only 和 none 两个选项）、纪律与风控、提醒推送（发送测试）、盘中监控。
+  - 地址参数：`?tab=` 选标签页；`?code=&name=&side=&price=&qty=&stop=&target=&reason=` 预填下单单子。

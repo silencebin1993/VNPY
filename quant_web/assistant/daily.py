@@ -1,0 +1,123 @@
+"""
+每日"投资助手"流水线（交易日收盘、日线更新之后，由 jobs.run_daily 调用；也可以单独在数据页点）：
+1. 大盘环境（日线变了才重算）；
+2. 扩展数据：持仓 + 自选 + 候选股的资金流、指数日线（每天）；其余扩展数据每周一次；
+3. 每天自动运行的选股方案（settings.assistant.screeners，默认"反转 + 低估值 + 低换手"）；
+4. 交易日终：模拟盘撮合、除权、移动止盈、资产快照；实盘同步成交、检查计划；
+5. 明日计划（持仓怎么做 + 条件单清单 + 候选）并推送摘要。
+每一步单独 try/except：某一步出错只记在结果里，不影响后面的步骤，也不影响原来的数据更新和预测。
+"""
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from datetime import date, datetime
+
+log = logging.getLogger("quant_web.assistant")
+WEEKLY_DAYS: int = 7
+
+
+def _step(out: dict, name: str, fn: Callable[[], object]) -> None:
+    try:
+        out[name] = fn()
+    except Exception as e:  # noqa: BLE001  单步失败只记录
+        log.exception("投资助手：%s 失败", name)
+        out.setdefault("errors", []).append(f"{name}：{type(e).__name__}: {e}")
+
+
+def _flow_codes(limit: int) -> list[str]:
+    import json
+
+    from .. import config
+    from ..trading import ledger, nightly
+
+    codes: list[str] = []
+    with ledger.connect() as c:
+        codes += [r["code"] for r in ledger.rows(c, "SELECT DISTINCT code FROM positions")]
+    try:
+        data = json.loads(config.WATCHLIST_FILE.read_text(encoding="utf-8")) if config.WATCHLIST_FILE.exists() else []
+        codes += [x["code"] if isinstance(x, dict) else str(x) for x in data]
+    except (OSError, ValueError):
+        pass
+    codes += [r["code"] for r in nightly.candidates(limit=20)]
+    return list(dict.fromkeys(codes))[:limit]
+
+
+def run(progress: Callable[[float, str], None] | None = None, day: date | None = None) -> dict:
+    from .. import settings as settings_mod
+    from ..market import history
+
+    say = progress or (lambda f, m: None)
+    s = settings_mod.load()
+    out: dict = {"started": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    if not s.assistant.enabled:
+        return {**out, "skipped": "投资助手每日流水线已在设置里关闭"}
+    day = day or history.last_date()
+    if day is None:
+        return {**out, "skipped": "还没有日线数据"}
+    out["date"] = str(day)
+
+    say(0.02, "投资助手：更新大盘环境……")
+
+    def regime() -> dict:
+        from ..analysis import market
+        r = market.current_regime()
+        return {"label": r["label"], "cap": r["cap"]}
+    _step(out, "regime", regime)
+
+    say(0.15, "投资助手：更新资金流和指数……")
+
+    def ext() -> dict:
+        from ..providers import updates
+        from ..trading import ledger
+        res: dict = {"fund_flow": updates.update_fund_flow(_flow_codes(s.assistant.fund_flow_limit), s.assistant.fund_flow_limit),
+                     "index_bars": updates.update_index_bars()}
+        last = ledger.get_meta("ext_full_update")
+        if not last or (day - date.fromisoformat(last)).days >= WEEKLY_DAYS:
+            res["weekly"] = updates.update_all()
+            ledger.set_meta("ext_full_update", str(day))
+        return {k: (v if not isinstance(v, dict) else {kk: vv for kk, vv in v.items() if kk in ("ok", "rows", "error", "source")})
+                for k, v in res.items()}
+    _step(out, "ext", ext)
+
+    say(0.4, "投资助手：运行每天的选股方案……")
+
+    def screens() -> dict:
+        from ..screener import engine, store
+        prof, risk = s.profile.model_dump(), s.risk.model_dump()
+        cache: dict = {}
+        res: dict = {}
+        for sid in list(s.assistant.screeners) or ["reversal_value"]:
+            try:
+                r = engine.run(store.get(sid), profile=prof, risk=risk, cache=cache)
+                store.save_result(sid, r)
+                res[sid] = {"rows": len(r["rows"]), "matched": r["matched_n"]}
+            except Exception as e:  # noqa: BLE001  某个方案出错不影响其他方案
+                res[sid] = {"error": str(e)}
+        return res
+    _step(out, "screeners", screens)
+
+    say(0.7, "投资助手：交易日终处理……")
+    def eod() -> dict:
+        from ..trading import service
+        return service.run_eod(day)
+    _step(out, "eod", eod)
+
+    say(0.85, "投资助手：生成明日计划……")
+
+    def plan() -> dict:
+        from .. import notify
+        from ..trading import nightly
+        n = nightly.build(day)
+        acts = [a for acc in n["accounts"] for a in acc["positions"] if a["action"] != "继续持有"]
+        lines: list[str] = []
+        if n.get("regime"):
+            lines.append(f"大盘环境：{n['regime']['label']}，建议总仓位不超过 {int((n['regime']['cap'] or 0) * 100)}%")
+        lines += [f"{a['name'] or a['code']}：{a['action']}（{'；'.join(a['reasons'])}）" for a in acts]
+        if n["candidates"]:
+            lines.append("候选：" + "、".join(f"{c['name']}" for c in n["candidates"][:5]) + "（需要你确认才会下单）")
+        notify.send(f"明日计划（{n['date']}）", "\n".join(lines) or "没有需要处理的持仓。", level="warn" if acts else "info", kind="nightly")
+        return {"actions": len(acts), "candidates": len(n["candidates"])}
+    _step(out, "nightly", plan)
+    say(1.0, "投资助手：完成")
+    return out

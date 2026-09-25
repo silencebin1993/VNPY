@@ -116,7 +116,7 @@
   const ROUTES = [
     { name: "dashboard", path: "/", title: "市场情绪", icon: "pulse", tab: true, group: "market" },
     { name: "watch", path: "/watch/:code?", nav: "/watch", title: "看盘", icon: "candle", tab: true, group: "market" },
-    { name: "watchlist", path: "/watchlist", title: "自选股", icon: "star", tab: true, group: "market" },
+    { name: "watchlist", path: "/watchlist", title: "自选股", icon: "star", group: "market" },
     { name: "news", path: "/news", title: "消息政策", icon: "news", group: "market" },
     { name: "sectors", path: "/sectors", title: "板块强弱", icon: "layers", group: "market" },
     { name: "screener", path: "/screener", title: "选股器", icon: "filter", tab: true, group: "pick" },
@@ -124,6 +124,7 @@
     { name: "predict", path: "/predict", title: "短线观察", icon: "rocket", group: "strategy" },
     { name: "model", path: "/model", title: "模型中心", icon: "cpu", group: "strategy" },
     { name: "settings", path: "/settings", title: "预测设置", icon: "sliders", group: "strategy" },
+    { name: "trade", path: "/trade", title: "交易", icon: "wallet", tab: true, group: "trade" },
     { name: "paper", path: "/paper", title: "策略跟踪", icon: "clipboard", group: "trade" },
     { name: "etf", path: "/etf", title: "稳健ETF", icon: "shield", group: "more" },
     { name: "data", path: "/data", title: "数据中心", icon: "database", group: "more" },
