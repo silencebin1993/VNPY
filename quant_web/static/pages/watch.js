@@ -386,9 +386,10 @@
           <button class="btn" @click="retryAll">再试一次</button><a class="btn primary" href="#/watch">重新搜索</a>
         </qw-empty>
       </qw-card>
-      <div v-else class="watch-layout">
-        <div class="stack">
-          <qw-card class="o1">
+      <div v-else>
+      <div class="watch-top">
+        <div class="watch-top-l">
+          <qw-card>
             <div v-if="!quote"><qw-skeleton :rows="4"/></div>
             <template v-else>
               <div class="watch-head">
@@ -420,7 +421,7 @@
             </template>
           </qw-card>
 
-          <qw-card class="o2" :pad="false">
+          <qw-card :pad="false">
             <div style="padding:6px 16px 0"><qw-tabs v-model="tabModel" :items="tabs"/></div>
             <div style="padding:10px 8px 4px">
               <template v-if="tab === 'minute'">
@@ -461,27 +462,15 @@
               <template v-else><span>蓝线 = 价格，黄线 = 当天平均成交价；虚线 = 昨天收盘价，线上方是涨、下方是跌</span></template>
             </div>
           </qw-card>
-
-          <qw-card v-if="flowOption" class="o5" title="主力资金（近20日）" icon="wallet" :help="HELP.flow">
-            <qw-chart :option="flowOption" height="180px"/>
-            <div class="flow-legend"><span><i style="background:var(--up)"></i>红 = 大资金净买入</span><span><i style="background:var(--down)"></i>绿 = 净卖出</span><span>第三方估算，仅供参考</span></div>
-          </qw-card>
-          <qw-card class="o6" title="相关新闻" icon="news" :loading="profileLoading">
-            <ul v-if="(pf.news || []).length" class="list-plain news-list">
-              <li v-for="(n, i) in pf.news.slice(0, 8)" :key="i" style="display:block">
-                <a v-if="n.url" :href="n.url" target="_blank" rel="noopener noreferrer">{{ n.title }} <qw-icon name="external" :size="12" style="opacity:.5"/></a>
-                <span v-else>{{ n.title }}</span>
-                <div class="meta"><span class="num">{{ $fmt.datetime(n.time) }}</span><span>{{ n.source }}</span></div>
-              </li>
-            </ul>
-            <qw-empty v-else compact icon="news" title="暂无相关新闻"/>
-          </qw-card>
         </div>
+        <div class="watch-top-r">
+          <qw-stage-card :diag="diag" :loading="diagLoading" :error="diagErr" @reload="loadDiag"/>
+        </div>
+      </div>
 
-        <div class="stack">
-          <qw-stage-card class="o3" :diag="diag" :loading="diagLoading" :error="diagErr" @reload="loadDiag"/>
-          <qw-risk-card class="o3" :risk="diag && diag.risk" :loading="diagLoading"/>
-          <qw-card class="o3" :title="pred && pred.kind === 'swing' ? 'AI波段评估' : pred ? 'AI涨停评估' : 'AI评估'" icon="sparkles" :help="HELP.ai" :loading="profileLoading" skeleton-height="260px">
+      <div class="watch-grid">
+          <qw-risk-card :risk="diag && diag.risk" :loading="diagLoading"/>
+          <qw-card :title="pred && pred.kind === 'swing' ? 'AI波段评估' : pred ? 'AI涨停评估' : 'AI评估'" icon="sparkles" :help="HELP.ai" :loading="profileLoading" skeleton-height="260px">
             <template #extra><span v-if="pred" class="qw-tag">{{ KIND_LABEL[pred.kind] || pred.label || 'AI预测' }}</span></template>
             <template v-if="pred">
               <div v-if="pred.kind === 'swing'" class="ai-prob" :class="{ low: !(pred.exp_ret > 0) }"><span class="big num">{{ $fmt.pct(pred.exp_ret, 2) }}</span><span class="muted">明天开盘买、按计划卖出的预期收益（模拟跟踪中）</span></div>
@@ -517,7 +506,7 @@
             </qw-empty>
           </qw-card>
 
-          <qw-card v-if="dayChips" class="o3" title="筹码分布" icon="layers" :help="CHIPS_HELP" :sub="'截至 ' + dayChips.as_of">
+          <qw-card v-if="dayChips" title="筹码分布" icon="layers" :help="CHIPS_HELP" :sub="'截至 ' + dayChips.as_of">
             <div class="chip-stats">
               <div><span class="muted">获利比例</span><b class="num">{{ isNum(dayChips.last.winner) ? Math.round(dayChips.last.winner * 100) + '%' : '—' }}</b></div>
               <div><span class="muted">平均成本</span><b class="num">{{ $fmt.price(dayChips.last.avg_cost) }}</b></div>
@@ -529,7 +518,12 @@
             <div class="muted" style="font-size:12px">红色 = 成本低于现价（获利盘），蓝色 = 成本高于现价（套牢盘）。{{ dayChips.note }}</div>
           </qw-card>
 
-          <qw-card v-if="book" class="o4" title="买卖五档" icon="bars" help="挂单情况：卖1~卖5是最便宜的5档卖单，买1~买5是出价最高的5档买单，数量单位是手（100股）。">
+          <qw-card v-if="flowOption" title="主力资金（近20日）" icon="wallet" :help="HELP.flow">
+            <qw-chart :option="flowOption" height="180px"/>
+            <div class="flow-legend"><span><i style="background:var(--up)"></i>红 = 大资金净买入</span><span><i style="background:var(--down)"></i>绿 = 净卖出</span><span>第三方估算，仅供参考</span></div>
+          </qw-card>
+
+          <qw-card v-if="book" title="买卖五档" icon="bars" help="挂单情况：卖1~卖5是最便宜的5档卖单，买1~买5是出价最高的5档买单，数量单位是手（100股）。">
             <div v-if="book.seal" class="book-seal" :class="book.seal.up ? 'up' : 'down'">
               <template v-if="book.seal.up"><b>涨停封板中</b>：没有人卖，买一有 <b class="num">{{ $fmt.int(book.seal.v / 100) }}</b> 手（约 {{ $fmt.money(book.seal.amt) }}）排队等着买。排队的钱越多，封得越牢，散户越难买到。</template>
               <template v-else><b>跌停封板中</b>：没有人买，卖一有 <b class="num">{{ $fmt.int(book.seal.v / 100) }}</b> 手（约 {{ $fmt.money(book.seal.amt) }}）排队等着卖，想卖也卖不掉。</template>
@@ -540,7 +534,7 @@
               <div class="book-side"><div v-for="b in book.bids" :key="b.lb"><span class="lb">{{ b.lb }}</span><span class="pr num" :class="$fmt.dir(b.p - q.prev_close)">{{ b.p ? $fmt.price(b.p) : '—' }}</span><span class="vo num">{{ b.v ? $fmt.int(b.v / 100) : '' }}</span></div></div>
             </div>
           </qw-card>
-          <qw-card class="o4" title="公司资料" icon="building" :loading="profileLoading">
+          <qw-card title="公司资料" icon="building" :loading="profileLoading">
             <qw-empty v-if="profileErr && !profile" compact icon="alert" title="资料暂时拿不到" :desc="profileErr"/>
             <template v-else>
               <div class="kv">
@@ -570,7 +564,7 @@
             </template>
           </qw-card>
 
-          <qw-card class="o7" title="龙虎榜" icon="users" :help="HELP.lhb" sub="最近上榜记录" :loading="profileLoading">
+          <qw-card title="龙虎榜" icon="users" :help="HELP.lhb" sub="最近上榜记录" :loading="profileLoading">
             <ul v-if="(pf.lhb || []).length" class="list-plain">
               <li v-for="(x, i) in pf.lhb.slice(0, 6)" :key="i" style="justify-content:space-between">
                 <div style="min-width:0"><div class="num" style="font-weight:600">{{ $fmt.date(x.date) }}</div><div class="muted ellipsis" style="font-size:12px;max-width:190px" v-tip="x.reason">{{ x.reason }}</div></div>
@@ -581,7 +575,7 @@
           </qw-card>
 
 
-          <qw-card class="o8" title="涨停记录" icon="flame" :help="HELP.lhist" sub="近一年" :loading="profileLoading">
+          <qw-card title="涨停记录" icon="flame" :help="HELP.lhist" sub="近一年" :loading="profileLoading">
             <template v-if="lhist.length">
               <div class="lu-summary"><span><b class="num">{{ lhistSummary.count }}</b>次涨停</span><span>最高<b class="num">{{ lhistSummary.max }}</b>连板</span><span v-if="lhistSummary.oneWord">一字<b class="num">{{ lhistSummary.oneWord }}</b>次</span></div>
               <ul class="list-plain lu-hist">
@@ -589,6 +583,17 @@
               </ul>
             </template>
             <qw-empty v-else compact icon="flame" title="近一年没有涨停过"/>
+          </qw-card>
+
+          <qw-card title="相关新闻" icon="news" :loading="profileLoading">
+            <ul v-if="(pf.news || []).length" class="list-plain news-list">
+              <li v-for="(n, i) in pf.news.slice(0, 8)" :key="i" style="display:block">
+                <a v-if="n.url" :href="n.url" target="_blank" rel="noopener noreferrer">{{ n.title }} <qw-icon name="external" :size="12" style="opacity:.5"/></a>
+                <span v-else>{{ n.title }}</span>
+                <div class="meta"><span class="num">{{ $fmt.datetime(n.time) }}</span><span>{{ n.source }}</span></div>
+              </li>
+            </ul>
+            <qw-empty v-else compact icon="news" title="暂无相关新闻"/>
           </qw-card>
         </div>
       </div>

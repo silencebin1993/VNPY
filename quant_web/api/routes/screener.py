@@ -45,7 +45,9 @@ def screener_schemes() -> Any:
             continue
         bt = store.load_backtest(store.backtest_key(v, _bt_params(v, profile)))
         latest = store.latest_result(sc["id"])
-        items.append({**sc, "backtest": {"verdict": bt["verdict"], "saved_at": bt.get("saved_at"), "key": bt.get("key")} if bt else None,
+        # 发给前端的是规范化后的方案（v）：内置方案里的"主力阶段"条件可能只写了 include 或 exclude 之一，
+        # 规范化会补成空列表；直接发原始 sc 会让"修改条件"编辑器读 undefined.includes 报错
+        items.append({**sc, **v, "backtest": {"verdict": bt["verdict"], "saved_at": bt.get("saved_at"), "key": bt.get("key")} if bt else None,
                       "latest_date": latest.get("date") if latest else None})
     return ok({
         "schemes": items, "fields": {k: {"label": v[0], "unit": v[1], "scale": S.DISPLAY_SCALE.get(k, 1)} for k, v in S.FIELDS.items()},

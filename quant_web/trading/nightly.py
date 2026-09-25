@@ -116,7 +116,8 @@ def build(day: date | None = None, with_stage: bool = True) -> dict:
         "regime": {k: reg.get(k) for k in ("label", "cap", "advice", "tone", "date")} if reg else None,
         "accounts": accounts_out, "candidates": candidates(),
         "note": "候选买入只是“符合方案、排名靠前”的股票，需要你逐只看诊断后在“交易”页确认才会下单；"
-                "选股方案的历史回测都没有显著跑赢随机，仓位宁小勿大。",
+                "这些候选来自选股器方案，它们的历史回测都没有显著跑赢随机，仓位宁小勿大；"
+                "样本外显著跑赢随机的是“量化选股”页面的每周组合。",
     }
     path = _dir().joinpath(f"{day}.json")
     path.parent.mkdir(parents=True, exist_ok=True)

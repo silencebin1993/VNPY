@@ -266,13 +266,15 @@
             </li>
             <li>
               <span class="n">2</span>
-              <div><b>每天晚上看“明日计划”</b><p>收盘更新后自动生成：持仓明天怎么做、要在券商 App 设的止损条件单、候选买入（逐只点“诊断”看清楚再决定）。<b>没有合适的就不买。</b></p>
-                <a class="linkbtn" href="#/trade?tab=nightly">去看明日计划 <qw-icon name="chevronRight" :size="14"/></a></div>
+              <div><b>每周看“量化选股”，每晚看“明日计划”</b><p>量化选股每周最后一个交易日收盘后给出下周要持有的 50 只和下单清单（样本外扣费后每年比同池随机多约 14%，但不是保证）；
+                明日计划告诉你持仓明天怎么做、要在券商 App 设的止损条件单。</p>
+                <a class="linkbtn" href="#/mf">去看量化选股 <qw-icon name="chevronRight" :size="14"/></a>
+                <a class="linkbtn" href="#/trade?tab=nightly">明日计划 <qw-icon name="chevronRight" :size="14"/></a></div>
             </li>
             <li>
               <span class="n">3</span>
               <div><b>先用模拟盘练，看复盘再说真钱</b><p>在「交易」建模拟账户按计划下单，或在「策略中心」开启模拟跟踪；过一两个月看「复盘」里的平均 R 和“守纪律”比例，满意再小仓位实盘。
-                要记住：我们验证过的选股方法都没有显著跑赢随机。</p>
+                要记住：选股器里的条件方案和经典公式验证下来都没有跑赢随机；目前只有“量化选股”在样本外显著跑赢，也要先小资金或模拟跟踪。</p>
                 <a class="linkbtn" href="#/strategy">打开策略中心 <qw-icon name="chevronRight" :size="14"/></a></div>
             </li>
           </ol>

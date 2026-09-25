@@ -12,7 +12,8 @@ from fastapi import FastAPI
 log = logging.getLogger("quant_web.api")
 
 # 按顺序登记；新增功能在这里加一行
-MODULES: list[str] = ["system", "providers", "indicators", "formula", "analysis", "screener", "trading", "lab", "strategy"]
+MODULES: list[str] = ["system", "providers", "indicators", "formula", "analysis", "screener", "trading", "lab", "strategy",
+                     "lianban", "multifactor"]
 
 
 def register(app: FastAPI) -> list[str]:

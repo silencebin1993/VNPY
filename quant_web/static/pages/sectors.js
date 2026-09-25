@@ -42,7 +42,7 @@
         <template #extra><input v-model="q" class="qw-input" placeholder="找行业" style="width:140px;height:30px"></template>
         <qw-skeleton v-if="loading" :rows="10" style="padding:16px"/>
         <qw-empty v-else-if="err" icon="alert" title="行业数据暂时算不出来" :desc="err" action-text="重试" @action="load"/>
-        <qw-table v-else :columns="columns" :rows="rows" row-key="industry" dense :page-size="40">
+        <qw-table v-else :columns="columns" :rows="rows" row-key="industry" dense :page-size="40" max-height="calc(100vh - 260px)">
           <template #cell-rank="{index}"><span class="muted num">{{ index + 1 }}</span></template>
           <template #cell-industry="{row}"><b v-tip="row.industry">{{ $fmt.industry(row.industry) }}</b></template>
           <template #cell-strength="{row}"><span class="num">{{ row.strength.toFixed(0) }}</span></template>

@@ -47,6 +47,8 @@
         selId.value = s.id;
         draft.value = clone(s);
         draft.value.universe = draft.value.universe || {};
+        draft.value.conditions = (draft.value.conditions || []).map((c) => (c.type === "stage"
+          ? { ...c, include: c.include || [], exclude: c.exclude || [] } : c));
         dirty.value = false;
         if (reset) { result.value = null; bt.value = null; btJob.value = ""; }
         if (s.backtest && s.backtest.key) loadBt(s.backtest.key);

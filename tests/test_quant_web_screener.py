@@ -201,6 +201,11 @@ def test_screener_api(env: pl.DataFrame, tmp_path: Path, monkeypatch: pytest.Mon
         meta = c.get("/api/screener/schemes").json()
         assert {s["id"] for s in meta["schemes"]} >= {p["id"] for p in schemes.PRESETS}
         assert "rps120" in meta["fields"] and "momentum" in meta["scoring"] and meta["profile_boards"] == ["main"]
+        # 回归：内置方案的"主力阶段"条件只写了 include 或 exclude 之一时，接口也要补齐成列表（否则"修改条件"编辑器报错）
+        for sc in meta["schemes"]:
+            for cond in sc.get("conditions") or []:
+                if cond["type"] == "stage":
+                    assert isinstance(cond["include"], list) and isinstance(cond["exclude"], list), sc["id"]
         r = c.post("/api/screener/run", json={"scheme": {"name": "临时", "universe": {"min_amount": 0}, "conditions": [],
                                                            "scoring": {"scheme": "momentum"}, "top_n": 5}})
         assert r.status_code == 200, r.text

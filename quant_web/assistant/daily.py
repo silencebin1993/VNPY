@@ -3,6 +3,7 @@
 1. 大盘环境（日线变了才重算）；
 2. 扩展数据：持仓 + 自选 + 候选股的资金流、指数日线（每天）；其余扩展数据每周一次；
 3. 模型实验室启用的模型给最新一天打分（选股器"模型打分"用）；每天自动运行的选股方案（settings.assistant.screeners，默认"反转 + 低估值 + 低换手"）；
+   量化选股（多因子 + LightGBM）给最新一天打分，本周最后一个交易日记下调仓组合（前向跟踪）；
 4. 交易日终：模拟盘撮合、除权、移动止盈、资产快照；实盘同步成交、检查计划；
 5. 明日计划（持仓怎么做 + 条件单清单 + 候选）并推送摘要。
 每一步单独 try/except：某一步出错只记在结果里，不影响后面的步骤，也不影响原来的数据更新和预测。
@@ -106,6 +107,13 @@ def run(progress: Callable[[float, str], None] | None = None, day: date | None =
                 res[sid] = {"error": str(e)}
         return res
     _step(out, "screeners", screens)
+
+    say(0.55, "投资助手：量化选股打分……")
+
+    def multifactor() -> dict:
+        from ..multifactor import service as mf
+        return mf.run_daily()
+    _step(out, "multifactor", multifactor)
 
     say(0.7, "投资助手：交易日终处理……")
     def eod() -> dict:

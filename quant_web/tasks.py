@@ -190,4 +190,18 @@ def _strategy_follow(params: dict, progress: Progress) -> Any:
     return follow.run_daily(progress=progress)
 
 
+@task("mf_daily", "量化选股：给最新一天打分", group=HEAVY,
+      description="补当天估值、算因子、用最近三年数据训练 LightGBM 给最新一天打分；本周最后一个交易日记下调仓组合（前向跟踪）")
+def _mf_daily(params: dict, progress: Progress) -> Any:
+    from .multifactor import service
+    return service.run_daily(progress=progress)
+
+
+@task("mf_report", "量化选股：完整回测", group=HEAVY,
+      description="2020 年起滚动训练、样本外回测（2022 年起），和同池随机、指数比，按资金规模算容量；约 10 分钟")
+def _mf_report(params: dict, progress: Progress) -> Any:
+    from .multifactor import service
+    return service.build_report(progress=progress)
+
+
 __all__ = ["EXT", "HEAVY", "TASKS", "TaskSpec", "formula_params", "job_name", "listing", "submit", "task"]

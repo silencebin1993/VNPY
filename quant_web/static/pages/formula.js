@@ -191,6 +191,7 @@
         </div>
       </qw-card>
 
+      <div class="fm-right">
       <div class="stack">
         <qw-card v-if="editMode" :title="editing.id ? '修改我的公式' : '写新公式'" icon="edit">
           <div class="form-grid" style="margin-bottom:10px">
@@ -229,13 +230,42 @@
           <div v-else class="muted">输出线：{{ check.outputs.join('、') || '（无）' }}；选股条件：{{ check.condition || '（无）' }}；大约需要 {{ check.lookback }} 天历史数据{{ check.uses_chips ? '；用到了筹码函数（计算较慢）' : '' }}</div>
         </qw-card>
 
+      </div>
+      <div class="stack">
+        <qw-card v-if="scan" :title="'今天（' + scan.date + '）选出 ' + scan.total + ' 只'" icon="filter" :sub="'范围：' + scan.boards.map((b) => BOARDS[b] || b).join('、') + (scan.truncated ? '，只显示成交额最大的 500 只' : '')" :pad="false">
+          <qw-table v-if="scan.rows.length" :rows="scan.rows" row-key="code" dense clickable :page-size="20" @row-click="(r) => doPreview(r)"
+            :columns="[{key:'name',label:'名称'},{key:'industry',label:'行业'},{key:'close',label:'收盘',align:'right'},{key:'pct',label:'涨跌幅',align:'right',sortable:true},{key:'amount',label:'成交额',align:'right',sortable:true},{key:'turn',label:'换手',align:'right',sortable:true},{key:'act',label:'',align:'right'}]">
+            <template #cell-name="{row}"><qw-stock :code="row.code" :name="row.name"/></template>
+            <template #cell-industry="{row}"><span class="muted">{{ $fmt.industry(row.industry) }}</span></template>
+            <template #cell-close="{row}"><span class="num">{{ $fmt.price(row.close) }}</span></template>
+            <template #cell-pct="{row}"><qw-price :value="row.pct" pct/></template>
+            <template #cell-amount="{row}"><span class="num">{{ $fmt.money(row.amount) }}</span></template>
+            <template #cell-turn="{row}"><span class="num">{{ isNum(row.turn) ? row.turn.toFixed(2) + '%' : '—' }}</span></template>
+            <template #cell-act="{row}"><button class="btn sm ghost" @click.stop="doPreview(row)">看信号</button></template>
+          </qw-table>
+          <qw-empty v-else compact icon="filter" title="今天没有股票满足这个公式"/>
+          <div class="muted" style="font-size:12px;padding:8px 16px">这只是“满足条件的股票”，不等于买入建议。先看上面的历史验证：没有优势的公式，选出来的股票并不比随便买更好。</div>
+        </qw-card>
+
+        <qw-card title="在个股上看信号" icon="candle" sub="K 线上的“信”字 = 公式成立的日子">
+          <div class="row" style="margin-bottom:8px">
+            <qw-stock-search :navigate="false" placeholder="输入股票，看这个公式在它身上什么时候出现" @select="doPreview"/>
+            <span v-if="previewing" class="muted">计算中…</span>
+            <span v-else-if="preview" class="muted">{{ previewCode }}：历史上出现 {{ preview.signals.length }} 次</span>
+          </div>
+          <qw-kline-pro v-if="previewChart && previewInd" :bars="previewChart.bars" :indicators="previewInd" :main="['ma', 'fmain']"
+            :subs="['vol', 'fsub'].filter((k) => previewInd[k])" :markers="previewMarkers" :initial-bars="160" :main-height="260"/>
+          <qw-empty v-else compact icon="candle" title="选一只股票试试" desc="可以从上面“今天选出”的列表里点“看信号”。"/>
+        </qw-card>
+      </div>
+      <div class="fm-wide">
         <qw-job v-if="valJob" :job-id="valJob" title="公式历史验证"/>
 
         <qw-card v-if="result" title="历史验证结果" icon="target" :sub="'数据 ' + result.data_start + ' ~ ' + result.data_end + ' · 验证于 ' + (result.saved_at || '')">
           <template #extra><button class="btn sm ghost" @click="doValidate(true)">重新验证</button></template>
           <div class="gd-note"><qw-icon name="info" :size="16"/><span>{{ HONEST }}</span></div>
           <div v-if="triedCount >= 5" class="gd-note warn"><qw-icon name="alert" :size="16"/><span>你已经验证过 {{ triedCount }} 个不同的公式。试得越多，越容易碰巧找到一个“看起来很好”的——以“留出期”（最近一段、没参与挑选）的成绩为准。</span></div>
-          <div v-for="h in holds" :key="h" class="fm-hold">
+          <div class="fm-holds"><div v-for="h in holds" :key="h" class="fm-hold">
             <div class="fm-hold-hd"><b>{{ HOLD_LABEL[h] || ('持有 ' + h + ' 天') }}</b>
               <span class="qw-tag" :class="result.holds[h].verdict.credible ? 'red' : result.holds[h].verdict.key === 'bad' ? 'green' : 'gray'">{{ result.holds[h].verdict.credible ? '有一定可信度' : '还不够可信' }}</span>
               <span class="muted">共 {{ result.holds[h].signals }} 次信号，{{ result.holds[h].unfilled }} 次买不进，{{ result.holds[h].pending }} 次还没到卖出日</span>
@@ -262,34 +292,10 @@
             </div></div>
             <qw-chart v-if="yearOption(h)" :option="yearOption(h)" height="150px"/>
           </div>
+          </div>
         </qw-card>
         <qw-card v-else-if="resultLoading" title="历史验证结果"><qw-skeleton :rows="4"/></qw-card>
-
-        <qw-card v-if="scan" :title="'今天（' + scan.date + '）选出 ' + scan.total + ' 只'" icon="filter" :sub="'范围：' + scan.boards.map((b) => BOARDS[b] || b).join('、') + (scan.truncated ? '，只显示成交额最大的 500 只' : '')" :pad="false">
-          <qw-table v-if="scan.rows.length" :rows="scan.rows" row-key="code" dense clickable :page-size="20" @row-click="(r) => doPreview(r)"
-            :columns="[{key:'name',label:'名称'},{key:'industry',label:'行业'},{key:'close',label:'收盘',align:'right'},{key:'pct',label:'涨跌幅',align:'right',sortable:true},{key:'amount',label:'成交额',align:'right',sortable:true},{key:'turn',label:'换手',align:'right',sortable:true},{key:'act',label:'',align:'right'}]">
-            <template #cell-name="{row}"><qw-stock :code="row.code" :name="row.name"/></template>
-            <template #cell-industry="{row}"><span class="muted">{{ $fmt.industry(row.industry) }}</span></template>
-            <template #cell-close="{row}"><span class="num">{{ $fmt.price(row.close) }}</span></template>
-            <template #cell-pct="{row}"><qw-price :value="row.pct" pct/></template>
-            <template #cell-amount="{row}"><span class="num">{{ $fmt.money(row.amount) }}</span></template>
-            <template #cell-turn="{row}"><span class="num">{{ isNum(row.turn) ? row.turn.toFixed(2) + '%' : '—' }}</span></template>
-            <template #cell-act="{row}"><button class="btn sm ghost" @click.stop="doPreview(row)">看信号</button></template>
-          </qw-table>
-          <qw-empty v-else compact icon="filter" title="今天没有股票满足这个公式"/>
-          <div class="muted" style="font-size:12px;padding:8px 16px">这只是“满足条件的股票”，不等于买入建议。先看上面的历史验证：没有优势的公式，选出来的股票并不比随便买更好。</div>
-        </qw-card>
-
-        <qw-card title="在个股上看信号" icon="candle" sub="K 线上的“信”字 = 公式成立的日子">
-          <div class="row" style="margin-bottom:8px">
-            <qw-stock-search :navigate="false" placeholder="输入股票，看这个公式在它身上什么时候出现" @select="doPreview"/>
-            <span v-if="previewing" class="muted">计算中…</span>
-            <span v-else-if="preview" class="muted">{{ previewCode }}：历史上出现 {{ preview.signals.length }} 次</span>
-          </div>
-          <qw-kline-pro v-if="previewChart && previewInd" :bars="previewChart.bars" :indicators="previewInd" :main="['ma', 'fmain']"
-            :subs="['vol', 'fsub'].filter((k) => previewInd[k])" :markers="previewMarkers" :initial-bars="160" :main-height="260"/>
-          <qw-empty v-else compact icon="candle" title="选一只股票试试" desc="可以从上面“今天选出”的列表里点“看信号”。"/>
-        </qw-card>
+      </div>
       </div>
 
       <qw-drawer v-model="refOpen" title="公式写法说明" width="560px">

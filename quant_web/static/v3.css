@@ -86,9 +86,10 @@
 .gd-rm p { margin-top: 4px; }
 
 /* ------------------------------------------------------------ 数据源 */
-.src-list { display: flex; flex-direction: column; }
-.src-row { display: grid; grid-template-columns: minmax(200px, 300px) minmax(0, 1fr); gap: 16px; padding: 14px 16px; border-top: 1px solid var(--border); }
-.src-row:first-child { border-top: 0; }
+/* 数据源列表：够宽时两列铺开、每行独立成卡；本身再给个高度合适的滚动框，别把整页拉成一条长队 */
+.src-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 0 16px 4px; max-height: calc(100vh - 300px); min-height: 240px; overflow-y: auto; }
+@media (min-width: 1700px) { .src-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.src-row { display: grid; grid-template-columns: minmax(200px, 300px) minmax(0, 1fr); gap: 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); align-self: start; }
 .src-cap b { font-size: 14.5px; margin-right: 6px; }
 .src-desc { font-size: 12.5px; line-height: 1.6; margin-top: 4px; }
 .src-chain { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
@@ -117,11 +118,17 @@
 /* ------------------------------------------------------------ 公式库 */
 .fm-layout { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 1000px) { .fm-layout { grid-template-columns: minmax(0, 1fr); } }
+/* 公式库右侧：够宽时左右各放一半内容，别把公式详情/验证结果和"今天选出/看信号"堆成一条长队 */
+.fm-right { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
+@media (min-width: 1400px) { .fm-right { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 .fm-list { position: sticky; top: calc(var(--top-h) + 12px); max-height: calc(100vh - var(--top-h) - 24px); display: flex; flex-direction: column; }
 @media (max-width: 1000px) { .fm-list { position: static; max-height: none; } }
-.fm-list-hd { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); }
-.fm-list-hd .qw-segmented { flex-wrap: wrap; }
-.fm-items { overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+.fm-list-hd { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); flex: none; }
+.fm-list-hd .qw-seg { flex-wrap: wrap; height: auto; }
+.fm-list-hd .qw-seg button { margin: 1px 0; }
+/* 列表卡的滚动链：卡身需要是纵向 flex 容器且允许收缩，.fm-items 才能在超出卡片高度时自己出滚动条，而不是把卡片撑高、溢出到旁边 */
+.fm-list > .qw-card-bd { display: flex; flex-direction: column; min-height: 0; }
+.fm-items { overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; flex: 1; min-height: 0; }
 .fm-item { text-align: left; padding: 9px 10px; border-radius: var(--radius-sm); border: 1px solid transparent; background: transparent; cursor: pointer; color: var(--text); }
 .fm-item:hover { background: var(--surface-2); }
 .fm-item.on { background: var(--primary-weak); border-color: color-mix(in srgb, var(--primary) 35%, transparent); }
@@ -284,3 +291,7 @@ textarea.fm-code { resize: vertical; }
 .gd-feat-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .gd-feat-hd .btn { margin-left: auto; }
 .gd-feat p { margin: 4px 0 0; font-size: 13px; line-height: 1.7; }
+/* 验证结果横跨右侧两栏，三个持有期并排 */
+.fm-wide { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.fm-holds { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 0 20px; }
+.fm-holds .fm-hold { min-width: 0; }
