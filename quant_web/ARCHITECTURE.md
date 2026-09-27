@@ -421,7 +421,7 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
   - `ProviderRegistry`：
     - `fetch(cap, *, chain=None, empty_ok=False, **kw)` 返回 `FetchResult(data, source, tried)`。按链逐个尝试；全部失败抛 `ProviderError`（中文，列出每个源的原因）；全部返回空时给空结果，不报错。
     - 其余方法：`chain(cap)`（用户顺序优先，否则 `DEFAULT_CHAINS`）、`status()`、`probe(cap, name)`（`sample_kwargs` 的小参数试取，不写文件）。
-  - `registry()` 是全局单例，首次调用时由 `builtin.register_all()` 注册内置源：local（本机数据，优先）、tencent、sina、exchange（沪深交易所两融）、em_datacenter（只走 datacenter-web）、baostock、akshare、builtin_news，另有可选的 tushare、qmt。
+  - `registry()` 是全局单例，首次调用时由 `builtin.register_all()` 注册内置源：local（本机数据，优先）、tencent、sina、exchange（沪深交易所两融）、em_datacenter（只走 datacenter-web）、baostock、akshare、builtin_news、astock（a-stock-data，见 8.8b），另有可选的 tushare、qmt。
 - `store.py`：扩展数据存档 `stock_lab/ext/{name}.parquet`（`ARCHIVES` 登记每个存档的去重主键和日期列）。`save(name, df, replace_where=None)` 合并去重后原子写入；`load(name)`；`info()`。
 - `updates.py`：`update_all(progress, flow_codes)` 等更新函数，出错只写进结果、不抛异常。
 - 现有 `market/*` 模块不改。日线面板仍由 `history.update_history` 维护（腾讯 + 多重校验）；注册表的 local 源从面板读数据。
@@ -499,7 +499,7 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
   - 可选平均成本线；右栏"筹码分布"卡片带白话解读。
 
 ### 8.8 数据源适配器实测（2026-09-24，providers 子模块）
-- 内置源共 11 个：local_src、tencent_src、sina_src、exchange_src、em_datacenter_src、baostock_src、akshare_src、news_src，以及可选的 tushare_src、qmt_src（这两个没有安装，只用假模块测过）。`builtin.register_all` 注册全部源，某个源出错不影响其他源。
+- 内置源共 12 个：local_src、tencent_src、sina_src、exchange_src、em_datacenter_src、baostock_src、akshare_src、news_src、astock_src（8.8b），以及可选的 tushare_src、qmt_src（这两个没有安装，只用假模块测过）。`builtin.register_all` 注册全部源，某个源出错不影响其他源。
 - `updates.py`：`update_all(progress, flow_codes)`，外加 `update_margin/holder_count/unlock/pledge/forecast/holder_trades/index_bars/index_members/fund_flow`。出错只写进结果、不抛异常。`DEFAULT_INDICES`：上证、深成、创业板、沪深300、中证500、中证1000。
 - 单位与口径（适配器已换算成 SCHEMAS 口径）：
   - 质押股数 ×1 万（原为万股，已用市值 / 股数核对）；增减持股数 ×1 万；akshare 日线换手 ×100；解禁 float_ratio ×100（原为小数，**只按数量级推断，未交叉核对**）。
@@ -510,6 +510,21 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
   - 上交所两融没有 rzrqye，深交所没有 rzche。
   - 解禁 shares 取"解禁数量"（不是"实际解禁数量"）。
   - 腾讯 1 分钟线只有最新价（开高低收相同）。
+
+### 8.8b a-stock-data 数据源 `providers/astock_src.py`（2026-09-27）
+- a-stock-data（github.com/silencebin1993/a-stock-data，Apache-2.0）是“Skill 文档 + 内嵌 Python”，不是 pip 包。
+  这里按它记录的接口地址、字段和单位重写成适配器 `AStockDataProvider`（name `astock`），原文随仓库放在 `.claude/skills/a-stock-data/`（Claude Code 取数用）。
+- 已有能力：`trade_calendar`（深交所官网整月日历，从 HISTORY_START 起逐月请求，排在 local/akshare/baostock 之后兜底）；
+  `index_members(index)`（中证 closeweight 文件带权重，没有权重文件时退回 cons；创业板指等走国证；**默认排第一**，因为只有它带权重，失败自动换下一个源）。
+  指数简称见 `INDEX_CODES`（hs300/zz500/zz1000/zz2000/sz50/kc50/cyb/cyb50），也接受 6 位指数代码。
+- 新能力（`CAPABILITIES`/`SCHEMAS` 已登记，目前只有 astock 提供，数据源页面可以“测试连接”；页面还没有用到）：
+  - `index_valuation(index)`：中证官网 PE（总股本 / 计算用股本两种口径）、股息率（百分数）；只有中证指数有。
+  - `research(code, max_pages=3)`：东财研报 `reportapi`：标题、机构、评级、今年 / 明年 / 后年 EPS 预测、PDF 地址，按发布日倒序。
+  - `hot_reason(day=None)`：同花顺强势股及上涨原因（题材标签），pct/turn 百分数、amount 元。
+  - `institution_survey(start, end, max_pages=20)`：东财 `RPT_ORG_SURVEYNEW` 按公告日的全市场机构调研，一次调研一行，org_count 机构家数。
+- 东财请求（研报、调研）全局串行、至少间隔 1 秒（`EM_MIN_INTERVAL`，a-stock-data 的防封建议）。读官网 .xls 需要 `xlrd`（已加进 requirements；缺了抛 `Unavailable`）。
+- **未实测**：开发环境连不上这些国内站点，解析按 a-stock-data 文档的字段写、用造的数据测过；
+  `tests/test_quant_web_astock.py -m network` 在本机跑一遍才算验证。
 
 ### 8.9 公式系统 `quant_web/formula/`（P3）
 - `parser.py`：`compile_formula(text) -> Program(statements, outputs, condition, uses_chips, indicators, lookback)`。
@@ -735,6 +750,10 @@ max_gap_pct=30`（字段上限就是 30，主板最多涨 10% → 等于不设�
   - `validate_config(raw)` 补默认值并校验（任务类型和模型要匹配），出错抛中文 ValueError；`describe(cfg)` 返回一句话描述。
 - `factors.py`：因子组注册表 `FACTOR_SETS`（label、short、source、cost、desc）。
   - basic / ta / alpha158 来自公式表，alpha101 需要截面数据（实现都在 `factors_builtin.py`）。
+  - tapkg（x_ 前缀，33 个，`factors_tapkg.py`）：开源 ta 技术分析库（`pip install ta`，可选；没装时 `listing()` 里显示不可用和安装命令）补充的指标：
+    Aroon、Vortex、KST、一目均衡表（visual=False，不前移）、STC、梅斯线、DPO、随机 RSI、TSI、UO、AO、ROC、PPO/PVO、肯特纳 / 唐奇安通道、CMF、强力指数、NVI、VWAP。
+    价格量纲的换成相对收盘价的比例。ta 的 KST 在序列开头用整段均值补空位（偷看未来），前 `KST_WARMUP`=53 行置空；
+    Aroon、NVI 在 ta 里是逐行 Python，改成 numpy 向量化（测试核对和 ta 结果一致）。实测约 15 秒 / 百万行。
   - mainforce 取选股器全历史字段表的 `m_*` 列，包括主力阶段打分和当前阶段 one-hot。
   - fundamental 按财报公布日做 join_asof，和选股器回测同一口径 `_fund_asof`：`f_ep`（每股收益 ÷ 股价）、`f_bp`、`f_roe`、`f_profit_yoy`、`f_revenue_yoy`、`f_debt_ratio`、`f_log_cap`。
   - formula：我的公式（不含筹码函数）的选股条件（0/1）和前 3 条输出线。价格类的输出线除以收盘价。

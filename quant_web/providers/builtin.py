@@ -20,6 +20,7 @@ _ADAPTERS: list[tuple[str, str]] = [
     ("baostock_src", "BaostockProvider"),
     ("akshare_src", "AkshareProvider"),
     ("news_src", "BuiltinNewsProvider"),
+    ("astock_src", "AStockDataProvider"),
     ("tushare_src", "TushareProvider"),
     ("qmt_src", "QmtProvider"),
 ]
