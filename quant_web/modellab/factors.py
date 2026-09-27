@@ -1,6 +1,7 @@
 """
 因子组注册表：每组因子的中文说明、计算成本、来源和计算函数。
-- frame：在公式表（前复权日线）上按股票分块计算：基础量价、技术指标、Alpha158（实现在 factors_builtin.py）；
+- frame：在公式表（前复权日线）上按股票分块计算：基础量价、技术指标、Alpha158（实现在 factors_builtin.py）、
+  ta 库扩展指标（开源 ta 技术分析库，实现在 factors_tapkg.py，可选依赖）；
 - cross：需要同一天全部股票的截面（Alpha101），按日期分块、带回看期；
 - table：直接取选股器缓存的全历史字段表：主力行为、基本面与市值；
 - formula：你在公式库里保存的公式（选股条件 0/1 + 输出线，用到筹码函数的公式跳过）。
@@ -19,6 +20,9 @@ FACTOR_SETS: dict[str, dict[str, Any]] = {
               "desc": "涨跌幅（动量/反转）、波动、换手、成交额、均线偏离、离高低点的距离等 30 多个"},
     "ta": {"label": "技术指标", "short": "指标", "source": "frame", "cost": 1.5, "min_per_m": 0.03,
            "desc": "MACD、KDJ、RSI、布林、DMI、OBV 等常用指标（价格类的已按股价标准化，不同股票可以比较）"},
+    "tapkg": {"label": "ta 库扩展指标", "short": "ta库", "source": "frame", "cost": 2.0, "min_per_m": 0.25,
+              "desc": "开源 ta 技术分析库补充的 33 个指标：Aroon、Vortex、KST、一目均衡表、STC、随机RSI、TSI、终极震荡、"
+                      "PPO/PVO、肯特纳/唐奇安通道、蔡金资金流 CMF、强力指数、NVI、VWAP 等（需要 pip install ta）"},
     "mainforce": {"label": "主力行为", "short": "主力", "source": "table", "cost": 0.2, "min_per_m": 0.02,
                   "desc": "主力阶段打分（吸筹/洗盘/拉升/出货/下跌）、相对强度 RPS、量能收缩、OBV 斜率、年内位置等"},
     "fundamental": {"label": "基本面与市值", "short": "基本面", "source": "table", "cost": 0.2, "min_per_m": 0.05,
@@ -92,6 +96,9 @@ def feature_names(set_key: str) -> list[str]:
         return list(FUND_LABELS)
     if set_key == "formula":
         return _formula_names()
+    if set_key == "tapkg":
+        from . import factors_tapkg
+        return factors_tapkg.feature_names()
     from . import factors_builtin
     return factors_builtin.feature_names(set_key)
 
@@ -104,6 +111,9 @@ def feature_label(name: str) -> str:
         return FUND_LABELS[name]
     if name.startswith("u_"):
         return "我的公式 " + name[2:]
+    if name.startswith("x_"):
+        from .factors_tapkg import TAPKG_INFO
+        return TAPKG_INFO[name][0] if name in TAPKG_INFO else name
     try:
         from . import factors_builtin
         info = factors_builtin.FEATURE_INFO.get(name)
@@ -113,8 +123,9 @@ def feature_label(name: str) -> str:
 
 
 def set_of(name: str) -> str:
-    return {"b": "basic", "t": "ta", "m": "mainforce", "f": "fundamental", "u": "formula"}.get(name.split("_", 1)[0],
-                                                                                            "alpha158" if name.startswith("a158_") else "alpha101")
+    prefix: str = name.split("_", 1)[0]
+    groups: dict[str, str] = {"b": "basic", "t": "ta", "x": "tapkg", "m": "mainforce", "f": "fundamental", "u": "formula"}
+    return groups.get(prefix, "alpha158" if name.startswith("a158_") else "alpha101")
 
 
 # ---------------------------------------------------------------- 计算
@@ -197,9 +208,9 @@ def formula_features(frame: pl.DataFrame, items: list[dict] | None = None) -> pl
 
 
 def frame_builder(set_key: str) -> Callable[[pl.DataFrame], pl.DataFrame]:
-    from . import factors_builtin
+    from . import factors_builtin, factors_tapkg
     return {"basic": factors_builtin.basic_features, "ta": factors_builtin.ta_features,
-            "alpha158": factors_builtin.alpha158_features}[set_key]
+            "tapkg": factors_tapkg.tapkg_features, "alpha158": factors_builtin.alpha158_features}[set_key]
 
 
 def cross_builder(set_key: str) -> Callable[..., pl.DataFrame]:
@@ -222,7 +233,7 @@ def count_of(sets: list[str]) -> int:
         try:
             n += len(feature_names(s))
         except Exception:  # noqa: BLE001  因子库加载失败时按经验值估
-            n += {"basic": 36, "ta": 40, "alpha158": 158, "alpha101": 80, "formula": 8}.get(s, 20)
+            n += {"basic": 36, "ta": 40, "tapkg": 33, "alpha158": 158, "alpha101": 80, "formula": 8}.get(s, 20)
     return n
 
 

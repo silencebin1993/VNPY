@@ -51,6 +51,10 @@ CAPABILITIES: dict[str, tuple[str, str]] = {
     "lhb": ("龙虎榜", "异常波动股票的买卖前五名营业部/机构"),
     "fundamentals": ("财务数据", "季度财报：营收、利润、负债等"),
     "news": ("新闻快讯", "财经快讯和个股新闻"),
+    "index_valuation": ("指数估值", "沪深300、中证500 等指数的市盈率和股息率（中证指数官网），用来看大盘贵不贵"),
+    "research": ("个股研报", "券商研报的标题、机构、评级和未来三年每股收益预测，附 PDF 地址"),
+    "hot_reason": ("强势股题材", "当天大涨的股票和它们上涨的原因（同花顺编辑整理的题材标签）"),
+    "institution_survey": ("机构调研", "哪些公司最近被机构上门调研、来了多少家机构（调研多说明机构在关注）"),
 }
 
 _F = pl.Float64
@@ -90,6 +94,17 @@ SCHEMAS: dict[str, dict[str, pl.DataType]] = {
     # direction 增持/减持；shares 变动股数；ratio_float 占流通股百分数
     "holder_trades": {"code": _S, "notice_date": _D, "holder": _S, "direction": _S, "shares": _F,
                       "ratio_float": _F, "start": _D, "end": _D},
+    # pe 总股本口径市盈率，pe_calc 计算用股本口径；dy / dy_calc 股息率百分数
+    "index_valuation": {"date": _D, "index": _S, "pe": _F, "pe_calc": _F, "dy": _F, "dy_calc": _F},
+    # eps_this / eps_next / eps_next2 今年、明年、后年每股收益预测（元）
+    "research": {"code": _S, "publish_date": _D, "title": _S, "org": _S, "rating": _S, "eps_this": _F,
+                 "eps_next": _F, "eps_next2": _F, "industry": _S, "pdf_url": _S},
+    # pct 涨幅百分数；turn 换手率百分数；amount 成交额(元)
+    "hot_reason": {"date": _D, "code": _S, "name": _S, "reason": _S, "pct": _F, "turn": _F, "amount": _F,
+                   "close": _F},
+    # notice_date 公告日（回测只能用这天之后）；survey_date 实际接待日；org_count 参与机构家数
+    "institution_survey": {"code": _S, "name": _S, "notice_date": _D, "survey_date": _D, "org_count": _F,
+                           "survey_way": _S, "place": _S},
 }
 
 
@@ -196,9 +211,9 @@ DEFAULT_CHAINS: dict[str, list[str]] = {
     "index_bars": ["tencent", "akshare"],
     "minute_bars": ["tencent", "sina"],
     "quotes": ["tencent"],
-    "index_members": ["baostock", "akshare"],
+    "index_members": ["astock", "baostock", "akshare"],
     "stock_list": ["local", "akshare", "baostock"],
-    "trade_calendar": ["local", "akshare", "baostock"],
+    "trade_calendar": ["local", "akshare", "baostock", "astock"],
     "industry": ["local", "baostock"],
     "fund_flow": ["sina"],
     "margin": ["exchange", "em_datacenter"],
@@ -210,6 +225,10 @@ DEFAULT_CHAINS: dict[str, list[str]] = {
     "lhb": ["local", "em_datacenter"],
     "fundamentals": ["local", "em_datacenter"],
     "news": ["builtin_news"],
+    "index_valuation": ["astock"],
+    "research": ["astock"],
+    "hot_reason": ["astock"],
+    "institution_survey": ["astock"],
 }
 
 
@@ -403,6 +422,10 @@ def sample_kwargs(capability: str) -> dict:
         "forecast": {},
         "holder_trades": {"start": today - timedelta(days=30), "end": today},
         "lhb": {"start": last_weekday, "end": last_weekday},
+        "index_valuation": {"index": "hs300"},
+        "research": {"code": "600519"},
+        "hot_reason": {"day": last_weekday},
+        "institution_survey": {"start": today - timedelta(days=7), "end": today},
     }.get(capability, {})
 
 
